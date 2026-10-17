@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -121,6 +121,7 @@ const DEFAULTS = {
     returnHome: true, speed: 18, stopSec: 15, hill: 1, radius: 25,
     voiceNav: false, voiceName: true, vibrate: true, keepAwake: true, autoNext: false,
     driveMode: false, sat: false,
+    theme: 'system', autoDone: false, autoSec: 8, autoRad: 15,
     dayOn: true, dayNext: null, dayEvery: 14, remindWhen: 'before', remindTime: '18:00', remindText: 'Zeitung austragen 📰',
     backupOn: true, backupEvery: 14, backupDay: 0, backupTime: '19:00'
   },
@@ -300,8 +301,16 @@ function initMap() {
   markersLayer = L.layerGroup().addTo(map);
   map.on('dragstart', () => { follow = false; });
 }
+function applyTheme() {
+  const t = S.settings.theme || 'system';
+  const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = dark ? '#1a2130' : '#ffffff';
+  const mp = $('#map'); if (mp) mp.classList.toggle('darkmap', dark && !sat);
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => S && applyTheme());
 function setSat(on, quiet) {
-  sat = on; if (S.settings.sat !== on) { S.settings.sat = on; save(); }
+  sat = on; applyTheme(); if (S.settings.sat !== on) { S.settings.sat = on; save(); }
   if (on) { map.removeLayer(baseLayer); satLayer.addTo(map); satLabels.addTo(map); }
   else { map.removeLayer(satLayer); map.removeLayer(satLabels); baseLayer.addTo(map); }
   $('#btnLayer').classList.toggle('on', on);
@@ -354,13 +363,29 @@ let pos = null, heading = null, watchId = null, follow = false;
 function startGPS() {
   if (watchId != null || !navigator.geolocation) return;
   watchId = navigator.geolocation.watchPosition(p => {
-    pos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
+    const c = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
+    if (!acceptFix(c)) return;
+    pos = c;
     if (p.coords.heading != null && !isNaN(p.coords.heading) && p.coords.speed > 0.8) heading = p.coords.heading;
     drawMe();
     if (S.run) onRunPosition();
   }, err => {
     if (err.code === 1) toast('Standort ist blockiert – bitte in Chrome erlauben');
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+}
+/* GPS-Ausreißer (z. B. plötzlich viele km weg) ignorieren */
+let jumpBuf = [];
+function acceptFix(c) {
+  if (c.acc > 150) return false;
+  if (!pos) return true;
+  const d = hav(pos, c), dt = Math.max(1, (c.t - pos.t) / 1000);
+  if (d > 150 && d / dt > 35) {
+    jumpBuf.push(c);
+    const ok = jumpBuf.length >= 5 && jumpBuf.every(x => hav(x, c) < 80);
+    if (!ok) { if (jumpBuf.length > 8) jumpBuf.shift(); return false; }
+  }
+  jumpBuf = [];
+  return true;
 }
 function drawMe() {
   if (!pos) return;
@@ -447,18 +472,18 @@ function renderList() {
   if (searchMode) return;
   const r = R(), body = $('#sheetBody');
   if (!r) {
-    body.innerHTML = `<div class="empty">${ic.map.replace('<svg', '<svg width="54" height="54" style="margin:0 auto;color:#2970ff"')}<h3>Noch keine Route</h3><p>Leg deine erste Route an – z.&nbsp;B. „Route Freund“ oder „Meine Route“.</p><button class="btn btn-p" id="eNew">${ic.plus} Route erstellen</button></div>`;
+    body.innerHTML = `<div class="empty">${ic.map.replace('<svg', '<svg width="54" height="54" style="margin:0 auto;color:#2970ff"')}<h3>Noch keine Route</h3><button class="btn btn-p" id="eNew">${ic.plus} Route erstellen</button></div>`;
     $('#eNew').onclick = createRoute; return;
   }
   if (!r.stops.length) {
-    body.innerHTML = `<div class="empty"><h3>Route ist noch leer</h3><p>Lade deine Adressliste als CSV-Datei (Adresse;PLZ;Ort;Name) oder suche Adressen oben einzeln.</p>
+    body.innerHTML = `<div class="empty"><h3>Route ist leer</h3>
       <button class="btn btn-p" id="eCsv">${ic.csv} CSV-Datei laden</button><button class="btn btn-s" id="eSearch">${ic.search} Adresse suchen</button></div>`;
     $('#eCsv').onclick = importCSV; $('#eSearch').onclick = () => { setSheet(true); setTimeout(() => $('#q').focus(), 280); }; return;
   }
   const list = stopsOrdered(r);
   const bad = list.filter(s => s.quality !== 'exact').length;
   let html = '';
-  if (bad) html += `<div class="note-box warn">${ic.pin.replace('<svg', '<svg width="20" height="20" style="display:inline;vertical-align:-4px"')} ${plural(bad, 'Adresse ist', 'Adressen sind')} nicht genau gefunden. Tippe drauf → „Position auf Karte korrigieren“.</div>`;
+  if (bad) html += `<div class="note-box warn">${ic.pin.replace('<svg', '<svg width="20" height="20" style="display:inline;vertical-align:-4px"')} ${plural(bad, 'Adresse', 'Adressen')} ungenau – antippen und Position korrigieren.</div>`;
   html += `<div class="section-h">Stopps${r.optimized ? ' · optimierte Reihenfolge' : ''}</div>`;
   html += list.map((s, i) => {
     const sub = [(s.count > 1 ? `<span class="cnt">${s.count}×</span> ` : '') + esc(s.zip + ' ' + s.city), s.name ? `<span class="nm">${esc(s.name)}</span>` : '', s.quality === 'none' ? '<span class="warn">⚠ nicht gefunden</span>' : s.quality === 'street' ? '<span class="warn">⚠ ungenau</span>' : ''].filter(Boolean).join(' · ');
@@ -478,8 +503,8 @@ function renderSearch(q, results) {
   }
   html += `<div class="section-h">Neue Adresse hinzufügen</div>`;
   if (results === null) html += `<div class="empty" style="padding:18px">${q.length < 3 ? 'Weiter tippen…' : 'Suche…'}</div>`;
-  else if (results === 'err') html += `<div class="empty" style="padding:18px">Suche geht gerade nicht (kein Internet?)</div>`;
-  else if (!results.length) html += `<div class="empty" style="padding:18px">Nichts gefunden. Tipp: mit Hausnummer suchen, z. B. „Musterstraße 5“.</div>`;
+  else if (results === 'err') html += `<div class="empty" style="padding:18px">Kein Internet</div>`;
+  else if (!results.length) html += `<div class="empty" style="padding:18px">Nichts gefunden.</div>`;
   else html += results.map((x, i) => `<div class="res" data-i="${i}">${ic.search}<div class="t"><b>${esc(x.street)}</b><small>${esc([x.zip, x.city, x.sub].filter(Boolean).join(' '))}</small></div><span class="add">${ic.plus.replace('<svg', '<svg style="width:26px;height:26px;color:#2970ff"')}</span></div>`).join('');
   body.innerHTML = html;
   body.querySelectorAll('[data-own]').forEach(el => el.onclick = () => openStop(el.dataset.own));
@@ -596,10 +621,10 @@ function newRoute(name) {
   S.routes.push(r); S.activeId = r.id; save(); return r;
 }
 async function createRoute() {
-  const name = await dialog({ title: 'Neue Route', text: 'Wie soll die Route heißen?', input: { value: '', placeholder: 'z. B. Meine Route' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Erstellen', cls: 'btn-p', value: true }] });
+  const name = await dialog({ title: 'Neue Route', input: { value: '', placeholder: 'Name' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Erstellen', cls: 'btn-p', value: true }] });
   if (!name) return;
   newRoute(name); drawMarkers(); drawRouteLine(); renderSheet(); setSheet(false);
-  const how = await dialog({ title: 'Adressen hinzufügen', text: 'Hast du eine Adressliste als CSV-Datei?', buttons: [{ label: 'Einzeln suchen', value: 's' }, { label: 'CSV laden', value: 'c', cls: 'btn-p' }] });
+  const how = await dialog({ title: 'Adressen hinzufügen', buttons: [{ label: 'Einzeln suchen', value: 's' }, { label: 'CSV laden', value: 'c', cls: 'btn-p' }] });
   if (how === 'c') importCSV(); else if (how === 's') { setSheet(true); setTimeout(() => $('#q').focus(), 280); }
 }
 function routeItemMenu(anchor, id) {
@@ -698,7 +723,7 @@ async function geocodeAll(r, retryBad = false) {
   else toast('Alle Adressen gefunden ✓');
 }
 async function askHome() {
-  const v = await dialog({ title: 'Wo startest du?', text: 'Deine Startadresse, z. B. „Musterweg 1, 12345 Musterstadt“. Sie wird nur auf diesem Handy gespeichert.', input: { value: S.settings.home.label ? S.settings.home.label + ', ' + S.settings.home.zip + ' ' + S.settings.home.city : '', placeholder: 'Straße Nr, PLZ Ort' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Speichern', cls: 'btn-p', value: true }] });
+  const v = await dialog({ title: 'Startadresse', input: { value: S.settings.home.label ? S.settings.home.label + ', ' + S.settings.home.zip + ' ' + S.settings.home.city : '', placeholder: 'Straße Nr, PLZ Ort' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Speichern', cls: 'btn-p', value: true }] });
   if (!v) return false;
   S.settings.home = Object.assign(parseAddr(v), { lat: null, lon: null, ele: null }); save(true);
   return true;
@@ -819,7 +844,7 @@ async function optimize(r, interactive) {
 }
 function showOptResult(r, pA, pB, choose) {
   const st = S.settings;
-  const approx = r.matrix.approx ? '<div class="note-box warn" style="margin:0 0 12px">Die Wege wurden nur geschätzt (Routing-Server nicht erreichbar).</div>' : '';
+  const approx = r.matrix.approx ? '<div class="note-box warn" style="margin:0 0 12px">Wege nur geschätzt (kein Internet).</div>' : '';
   const w = document.createElement('div'); w.className = 'dlg-wrap';
   const sel = () => r.plan.returnHome;
   const draw = () => {
@@ -829,7 +854,7 @@ function showOptResult(r, pA, pB, choose) {
       <p style="margin:0 0 4px"><b>Ende der Route:</b></p>
       <div class="cmp"><button data-r="1" class="${sel() ? 'sel' : ''}"><b>${fmtDur(pA.total)}</b><small>zurück zum ${esc(st.home.label)}</small></button>
       <button data-r="0" class="${!sel() ? 'sel' : ''}"><b>${fmtDur(pB.total)}</b><small>endet bei ${esc(pB.endName)}</small></button></div>
-      <p style="font-size:14px">Rückweg kostet ${fmtDur(pA.total - pB.total)} extra. Der Berg wird ${['nicht berücksichtigt', 'etwas gemieden', 'stark gemieden'][st.hill]} (Einstellungen).</p>
+      
       <div class="btns"><button class="btn btn-s" id="oList">Liste ansehen</button><button class="btn btn-p" id="oGo">${ic.play} Starten</button></div></div>`;
     w.querySelectorAll('[data-r]').forEach(bn => bn.onclick = async () => { const ret = bn.dataset.r === '1'; if (ret === sel()) return; await choose(ret); draw(); });
     w.querySelector('#oList').onclick = () => { w.remove(); setSheet(true); };
@@ -844,16 +869,16 @@ function openStop(id) {
   const r = R(); const s = r.stops.find(x => x.id === id); if (!s) return;
   const list = stopsOrdered(r); const no = list.indexOf(s) + 1;
   const pg = openPage(`
-    <div class="page-h"><button class="icon-btn" id="sHelp">${ic.help}</button><h1>Stopp bearbeiten</h1><button class="act" data-close>Fertig</button></div>
+    <div class="page-h"><span style="width:46px"></span><h1>Stopp bearbeiten</h1><button class="act" data-close>Fertig</button></div>
     <div class="page-b">
       <div class="ed-top"><div class="ed-id">${r.optimized ? 'Stopp ' + no + ' von ' + list.length : 'Noch nicht optimiert'}${s.ele != null ? ' · ' + Math.round(s.ele) + ' m hoch' : ''}${s.status === 'done' ? ' · ✓ erledigt' : ''}</div>
         <div class="ed-addr">${esc(s.street)}</div><div class="ed-city">${esc(s.zip + ' ' + s.city)}</div></div>
       <div class="chips">${COLORS.map(c => `<button class="chip ${(s.color || COLORS[0]) === c ? 'sel' : ''}" data-c="${c}"><i style="background:${c}"></i></button>`).join('')}</div>
-      <div class="field"><label>Name auf dem Briefkasten</label><input id="sName" value="${esc(s.name)}" placeholder="z. B. Nachname" autocomplete="off"></div>
-      <div class="row">${ic.copy}<div class="l">Anzahl Blätter<small>wie viele hier rein müssen</small></div><div class="step"><button id="cM">−</button><span id="cV">${s.count || 1}</span><button id="cP">+</button></div></div>
-      <div class="field"><label>Notizen</label><textarea id="sNote" rows="2" placeholder="z. B. Briefkasten hinten am Tor">${esc(s.note)}</textarea></div>
+      <div class="field"><label>Name auf dem Briefkasten</label><input id="sName" value="${esc(s.name)}" autocomplete="off"></div>
+      <div class="row">${ic.copy}<div class="l">Anzahl Blätter</div><div class="step"><button id="cM">−</button><span id="cV">${s.count || 1}</span><button id="cP">+</button></div></div>
+      <div class="field"><label>Notizen</label><textarea id="sNote" rows="2" >${esc(s.note)}</textarea></div>
       <div class="row">${ic.sort}<div class="l">Reihenfolge</div><div class="seg" id="sPos">${[['first', 'Erster'], ['auto', 'Auto'], ['last', 'Letzter']].map(([v, l]) => `<button data-v="${v}" class="${(s.pos || 'auto') === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-      <div class="row">${ic.timer}<div class="l">Haltezeit<small>Standard: ${S.settings.stopSec} Sek.</small></div><div class="step"><button id="tM">−</button><span id="tV">${s.stopSec || S.settings.stopSec} s</span><button id="tP">+</button></div></div>
+      <div class="row">${ic.timer}<div class="l">Haltezeit</div><div class="step"><button id="tM">−</button><span id="tV">${s.stopSec || S.settings.stopSec} s</span><button id="tP">+</button></div></div>
       <div class="row">${ic.check}<div class="l">Erledigt</div><button class="tog ${s.status === 'done' ? 'on' : ''}" id="sDone"></button></div>
       <div class="grey" style="margin-top:8px">
         <div class="link-row" id="sMove">${ic.move}<span>Position auf Karte korrigieren</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
@@ -861,7 +886,7 @@ function openStop(id) {
         <div class="link-row" id="sDup">${ic.copy}<span>Stopp duplizieren</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
         <div class="link-row red" id="sDel">${ic.trash}<span>Stopp löschen</span></div>
       </div>
-      ${s.quality === 'street' ? '<div class="note-box warn">Diese Adresse wurde nur ungefähr gefunden (Straße, nicht Hausnummer). Bitte Position prüfen.</div>' : s.quality === 'none' ? '<div class="note-box warn">Diese Adresse wurde nicht gefunden. Bitte „Adresse ändern“ oder Position auf der Karte setzen.</div>' : ''}
+      ${s.quality === 'street' ? '<div class="note-box warn">Nur ungefähr gefunden – Position prüfen.</div>' : s.quality === 'none' ? '<div class="note-box warn">Nicht gefunden – Adresse ändern oder Position setzen.</div>' : ''}
     </div>`, { onClose: () => { save(); drawMarkers(); renderList(); } });
   const el = pg.el;
   if (s.lat != null) map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17));
@@ -874,10 +899,9 @@ function openStop(id) {
   const setT = d => { s.stopSec = clamp((s.stopSec || S.settings.stopSec) + d, 5, 300); $('#tV', el).textContent = s.stopSec + ' s'; recomputePlan(r); save(); };
   $('#tM', el).onclick = () => setT(-5); $('#tP', el).onclick = () => setT(5);
   $('#sDone', el).onclick = e => { s.status = s.status === 'done' ? 'open' : 'done'; e.currentTarget.classList.toggle('on', s.status === 'done'); save(); };
-  $('#sHelp', el).onclick = () => dialog({ title: 'Stopp bearbeiten', text: '<b>Name:</b> wird dir beim Austragen groß angezeigt (und vorgelesen, wenn eingeschaltet).<br><b>Reihenfolge:</b> „Erster“/„Letzter“ zwingt den Stopp an den Anfang oder ans Ende.<br><b>Haltezeit:</b> wie lange du an diesem Briefkasten brauchst (z. B. langer Hof).', buttons: [{ label: 'OK', cls: 'btn-p', value: 1 }] });
   $('#sMove', el).onclick = () => { pg.close(); dragStop(s); };
   $('#sAddr', el).onclick = async () => {
-    const v = await dialog({ title: 'Adresse ändern', text: 'Straße und Hausnummer:', input: { value: s.street }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Suchen', cls: 'btn-p', value: true }] });
+    const v = await dialog({ title: 'Adresse ändern', input: { value: s.street }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Suchen', cls: 'btn-p', value: true }] });
     if (!v) return; const b = busy('Adresse wird gesucht');
     try { const g = await geocode(v, s.zip, s.city); s.street = v; if (g.lat != null) { s.lat = g.lat; s.lon = g.lon; s.ele = null; } s.quality = g.quality; invalidate(r); save(); b.close(); pg.close(); openStop(s.id); toast(g.quality === 'exact' ? 'Gefunden ✓' : 'Nur ungefähr gefunden'); }
     catch (e) { b.close(); toast('Kein Internet'); }
@@ -941,7 +965,18 @@ async function keepAwake(on) {
   } catch (e) { }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S && S.run) keepAwake(true); });
+/* Automatisch abhaken: nah am Haus + stehen geblieben */
+let dwell = null, autoTimer = null;
+function autoTick() {
+  const st = S.settings;
+  if (!st.autoDone || !S.run || S.run.pausedAt || !pos) { dwell = null; return; }
+  const n = nextStop(); if (!n) { dwell = null; return; }
+  if (hav(pos, n) > st.autoRad + Math.min(10, (pos.acc || 0) / 2)) { dwell = null; return; }
+  if (!dwell || dwell.id !== n.id || hav(pos, dwell.anchor) > 10) { dwell = { id: n.id, anchor: { lat: pos.lat, lon: pos.lon }, t: Date.now() }; return; }
+  if (Date.now() - dwell.t >= st.autoSec * 1000) { dwell = null; driveArrived = null; markDone(n); toast('✓ ' + n.street); }
+}
 function enterNav() {
+  clearInterval(autoTimer); autoTimer = setInterval(autoTick, 1000);
   document.body.classList.add('nav'); setSheet(false);
   follow = true; startGPS(); keepAwake(true);
   drawMarkers(); drawRouteLine(); renderNav(); arm();
@@ -951,7 +986,7 @@ function enterNav() {
   maybeLeg(true);
 }
 function exitNav() {
-  document.body.classList.remove('nav'); clearInterval(etaTimer); keepAwake(false); follow = false; closeDrive(true);
+  document.body.classList.remove('nav'); clearInterval(etaTimer); clearInterval(autoTimer); dwell = null; keepAwake(false); follow = false; closeDrive(true);
   if (legLine) { map.removeLayer(legLine); legLine = null; } leg = null; lastTarget = null;
   $('#navTop').innerHTML = ''; $('#navBottom').innerHTML = '';
   drawMarkers(); renderSheet(); fitAll();
@@ -987,15 +1022,16 @@ function renderNavTop() {
   if (!r) return;
   if (!n) { $('#navTop').innerHTML = `<div class="nt-card"><div class="nt-body"><div class="nt-num" style="background:var(--green)">${ic.check.replace('<svg', '<svg width="26" height="26"')}</div><div class="nt-main"><div class="a">Alle Briefkästen erledigt!</div><div class="s">${r.plan.returnHome ? 'Jetzt zurück zum ' + esc(S.settings.home.label) : 'Fertig 🎉'}</div></div></div></div>`; return; }
   const list = stopsOrdered(r); const no = list.indexOf(n) + 1;
-  const byRoute = leg && leg.target === n.id && leg.steps;
-  const d = pos ? (byRoute ? leg.dist * (leg.remainFrac ?? 1) : hav(pos, n)) : null;
+  const d = wayLeft(n);
+  const stp0 = leg && leg.target === n.id && leg.steps ? currentStep() : null;
+  const arrow = stp0 && !/Ziel/.test(stp0.text) ? stp0.icon : ic.straight;
   let man = '';
   if (leg && leg.steps && S.settings.voiceNav) {
     const stp = currentStep();
     if (stp) man = `<div class="man">${stp.icon}<div class="t">${stp.dist != null ? 'In ' + fmtKm(stp.dist) : ''}<small>${esc(stp.text)}</small></div></div>`;
   }
-  $('#navTop').innerHTML = `<div class="nt-card">${man}<div class="nt-body"><div class="nt-num">${no}</div><div class="nt-main"><div class="s">Nächster Stopp · ${no} von ${list.length}</div><div class="a">${esc(n.street)}</div>${n.name || n.count > 1 ? `<div class="n">${n.count > 1 ? `<span class="cnt">${n.count}×</span> ` : ''}${esc(n.name || '')}</div>` : ''}${n.note ? `<div class="o">📝 ${esc(n.note)}</div>` : ''}</div>${d != null ? `<div class="nt-dist">${fmtKm(d)}<small>${byRoute ? 'Weg' : 'Luftlinie'}</small></div>` : ''}</div></div>`;
-  $('#navTop .nt-body').onclick = () => showArrive(n, true);
+  $('#navTop').innerHTML = `<div class="nt-card">${man}<div class="nt-body"><div class="nt-num">${no}</div><div class="nt-main"><div class="s">Nächster Stopp · ${no} von ${list.length}</div><div class="a">${esc(n.street)}</div>${n.name || n.count > 1 ? `<div class="n">${n.count > 1 ? `<span class="cnt">${n.count}×</span> ` : ''}${esc(n.name || '')}</div>` : ''}${n.note ? `<div class="o">📝 ${esc(n.note)}</div>` : ''}</div>${d != null ? `<div class="nt-dist"><span class="nt-arrow">${arrow}</span>${fmtKm(d)}</div>` : ''}</div></div>`;
+  $('#navTop .nt-body').onclick = () => openDrive();
 }
 function renderNavBottom() {
   const r = runRoute(); if (!r) return;
@@ -1043,7 +1079,7 @@ function afterChange() {
   arriveShownFor = null; drawMarkers(); renderNav(); maybeLeg(true);
   const n = nextStop();
   if (!n) return finishRun();
-  if (S.settings.voiceNav) speak('Weiter zu ' + speakAddr(n));
+  if (S.settings.voiceNav) speak('Weiter zu ' + speakAddr(n) + (n.count > 1 ? '. ' + n.count + ' Blätter' : '') + (n.name ? '. ' + n.name : '') + (n.note ? '. ' + n.note : ''));
 }
 function togglePause() {
   if (S.run.pausedAt) { S.run.paused += Date.now() - S.run.pausedAt; S.run.pausedAt = null; toast('Weiter geht\'s'); }
@@ -1116,7 +1152,8 @@ async function maybeLeg(force) {
   let rt = null;
   try { rt = await osrmRoute([pos, n], true); } catch (e) { }
   const coords = rt ? rt.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] })) : [pos, { lat: n.lat, lon: n.lon }];
-  leg = { target: n.id, coords, dur: rt ? rt.duration : hav(pos, n) * 1.4 / 4.2, dist: rt ? rt.distance : hav(pos, n) * 1.4, steps: rt ? buildSteps(rt) : null, remainFrac: 1 };
+  leg = { target: n.id, coords, dur: rt ? rt.duration : hav(pos, n) * 1.4 / 4.2, dist: rt ? rt.distance : hav(pos, n) * 1.4, steps: rt ? buildSteps(rt) : null, remainFrac: 1, real: !!rt };
+  prepLeg(leg);
   spokenSteps = new Set();
   if (legLine) map.removeLayer(legLine);
   legLine = L.polyline(coords.map(p => [p.lat, p.lon]), { color: '#1f9d55', weight: 7, opacity: .9, dashArray: rt ? null : '8 10' }).addTo(map);
@@ -1139,10 +1176,33 @@ function distSeg(p, a, b) {
   const dx = bx - ax, dy = by - ay; const t = clamp(-(ax * dx + ay * dy) / ((dx * dx + dy * dy) || 1), 0, 1);
   return Math.hypot(ax + t * dx, ay + t * dy);
 }
+function prepLeg(l) {
+  const c = l.coords; l.cum = [0];
+  for (let i = 1; i < c.length; i++) l.cum.push(l.cum[i - 1] + hav(c[i - 1], c[i]));
+  l.total = l.cum[l.cum.length - 1] || 0;
+  if (l.steps) l.steps.forEach(st => st.along = projectAlong(l, st).along);
+}
+function projectAlong(l, p) {
+  const c = l.coords; if (c.length < 2) return { d: hav(p, c[0]), along: 0 };
+  const kx = 111320 * Math.cos(p.lat * Math.PI / 180), ky = 110540;
+  let best = { d: Infinity, along: 0 };
+  for (let i = 0; i < c.length - 1; i++) {
+    const ax = (c[i].lon - p.lon) * kx, ay = (c[i].lat - p.lat) * ky, bx = (c[i + 1].lon - p.lon) * kx, by = (c[i + 1].lat - p.lat) * ky;
+    const dx = bx - ax, dy = by - ay, t = clamp(-(ax * dx + ay * dy) / ((dx * dx + dy * dy) || 1), 0, 1);
+    const d = Math.hypot(ax + t * dx, ay + t * dy);
+    if (d < best.d) best = { d, along: l.cum[i] + t * (l.cum[i + 1] - l.cum[i]) };
+  }
+  return best;
+}
+/* Meter bis zum Haus über die Straße (nicht Luftlinie) */
+function wayLeft(n) {
+  if (!pos || !n) return null;
+  if (leg && leg.target === n.id && leg.cum && leg.real) return Math.max(0, leg.total - projectAlong(leg, pos).along);
+  return hav(pos, n) * 1.3;
+}
 function updateLegProgress() {
-  if (!leg || !pos) return;
-  const remain = hav(pos, leg.coords[leg.coords.length - 1]) * 1.3;
-  leg.remainFrac = clamp(remain / Math.max(1, leg.dist), 0, 1);
+  if (!leg || !pos || !leg.cum) return;
+  leg.remainFrac = clamp((leg.total - projectAlong(leg, pos).along) / Math.max(1, leg.total), 0, 1);
 }
 const DIRS = { left: 'links', right: 'rechts', 'slight left': 'leicht links', 'slight right': 'leicht rechts', 'sharp left': 'scharf links', 'sharp right': 'scharf rechts', straight: 'geradeaus', uturn: 'wenden' };
 function buildSteps(rt) {
@@ -1163,7 +1223,8 @@ function buildSteps(rt) {
 }
 function currentStep() {
   if (!leg || !leg.steps || !pos) return null;
-  for (const s of leg.steps) { if (spokenSteps.has(s.i + 'done')) continue; const d = hav(pos, s); return Object.assign({}, s, { dist: d }); }
+  const at = projectAlong(leg, pos).along;
+  for (const s of leg.steps) { const d = s.along - at; if (d > -6 && !spokenSteps.has(s.i + 'done')) return Object.assign({}, s, { dist: Math.max(0, d) }); }
   return null;
 }
 function voiceStep() {
@@ -1239,7 +1300,7 @@ function renderDrive() {
   let dir;
   if (here) dir = `<div class="dv-dir">${ic.flag}<div><b>Du bist da</b><small>Briefkasten einwerfen</small></div></div>`;
   else if (stp && !/Ziel/.test(stp.text)) dir = `<div class="dv-dir">${stp.icon}<div><b>In ${fmtKm(stp.dist)}</b><small>${esc(stp.text)}</small></div></div>`;
-  else dir = `<div class="dv-dir">${ic.straight}<div><b>${d != null ? 'Noch ' + fmtKm(leg && leg.target === n.id && leg.steps ? leg.dist * (leg.remainFrac ?? 1) : d) : 'Weiter'}</b><small>bis zum Haus</small></div></div>`;
+  else dir = `<div class="dv-dir">${ic.straight}<div><b>${wayLeft(n) != null ? 'Noch ' + fmtKm(wayLeft(n)) : 'Weiter'}</b><small>bis zum Haus</small></div></div>`;
   driveEl.className = 'drive' + (here ? ' here' : '');
   driveEl.innerHTML = `
     <div class="dv-top"><button id="dvV" class="dv-x ${voice ? 'on' : ''}">${voice ? ic.vol : ic.mute}<small>${voice ? 'Ansage an' : 'Ansage aus'}</small></button>
@@ -1261,58 +1322,66 @@ function renderDrive() {
 /* ---------- Einstellungen ---------- */
 function openSettings() {
   const st = S.settings;
-  const tog = (k, l, sub) => `<div class="row"><div class="l">${l}${sub ? `<small>${sub}</small>` : ''}</div><button class="tog ${st[k] ? 'on' : ''}" data-t="${k}"></button></div>`;
+  const tog = (k, l) => `<div class="row"><div class="l">${l}</div><button class="tog ${st[k] ? 'on' : ''}" data-t="${k}"></button></div>`;
   const pg = openPage(`<div class="page-h"><button class="icon-btn" data-close>${ic.back}</button><h1>Einstellungen</h1><span style="width:46px"></span></div>
   <div class="page-b">
-    <div class="set-h">Start & Ziel</div>
-    <div class="link-row" id="eHome">${ic.home}<span>Startadresse<br><small style="color:var(--mut);font-size:15px">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · noch nicht gefunden' : ' ✓') : 'noch nicht festgelegt'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    ${tog('returnHome', 'Am Ende zurück zum Start', 'Beim Optimieren siehst du immer beide Varianten')}
-    <div class="set-h">Erinnerung: Austragetag</div>
-    ${tog('dayOn', 'Erinnerung an', 'Hinweis in der App + Kalender-Termin')}
-    <div class="row">${ic.clock}<div class="l">Nächster Austragetag<small>${st.dayNext ? 'dann ' + ({ 7: 'jede Woche', 14: 'alle 2 Wochen', 28: 'alle 4 Wochen' }[st.dayEvery]) : 'noch nicht festgelegt'}</small></div><input type="date" id="eDay" class="date-in" value="${st.dayNext || ''}"></div>
-    <div class="row"><div class="l">Wie oft?</div><div class="seg" id="eEvery">${[[7, '1 Woche'], [14, '2 Wochen'], [28, '4 Wochen']].map(([v, l]) => `<button data-v="${v}" class="${st.dayEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Erinnern</div><div class="seg" id="eWhen">${[['before', 'Am Tag davor'], ['same', 'Am Austragetag']].map(([v, l]) => `<button data-v="${v}" class="${st.remindWhen === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eTime" class="date-in" value="${st.remindTime}"></div>
-    <div class="field"><label>Text der Erinnerung</label><input id="eText" value="${esc(st.remindText)}" placeholder="z. B. Zeitung austragen 📰"></div>
-    <div class="link-row" id="eCalG">${ic.clock}<span>In Google Kalender eintragen<br><small style="color:var(--mut);font-size:15px">wiederholt sich automatisch – dein Handy erinnert dich</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    <div class="link-row" id="eCalI">${ic.download}<span>Kalender-Datei (.ics)<br><small style="color:var(--mut);font-size:15px">für Samsung- und andere Kalender</small></span></div>
-    <div class="set-h">Erinnerung: Backup</div>
-    ${tog('backupOn', 'Backup-Erinnerung an', 'Die App fragt nach, wenn ein Backup fällig ist')}
-    <div class="row"><div class="l">Wie oft?</div><div class="seg" id="eBEvery">${[[7, '1 Woche'], [14, '2 Wochen'], [28, '4 Wochen']].map(([v, l]) => `<button data-v="${v}" class="${st.backupEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Wochentag</div><select id="eBDay" class="date-in">${['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'].map((l, i) => `<option value="${i}" ${st.backupDay === i ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eBTime" class="date-in" value="${st.backupTime}"></div>
-    <div class="link-row" id="eBCalG">${ic.clock}<span>Backup-Erinnerung in Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    <div class="link-row" id="eBCalI">${ic.download}<span>Backup-Erinnerung als Kalender-Datei (.ics)</span></div>
+    <div class="set-h">Start</div>
+    <div class="link-row" id="eHome">${ic.home}<span>Startadresse<br><small style="color:var(--mut);font-size:15px">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · nicht gefunden' : '') : '–'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+    ${tog('returnHome', 'Zurück zum Start')}
     <div class="set-h">Unterwegs</div>
-    <div class="row"><div class="l">Tempo E-Roller<small>für die Zeitberechnung</small></div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
-    <div class="row"><div class="l">Zeit pro Briefkasten<small>Hof rein, einwerfen, raus</small></div><div class="step"><button data-s="stopSec" data-d="-5">−</button><span>${st.stopSec} s</span><button data-s="stopSec" data-d="5">+</button></div></div>
-    <div class="row"><div class="l">Berg vermeiden<small>lieber 1× hoch, dann bergab</small></div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Ankunft erkennen ab<small>Abstand zum Haus</small></div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
-    <div class="set-h">Ansagen & Anzeige</div>
-    ${tog('voiceNav', 'Sprachnavigation', 'Abbiegehinweise vorlesen')}
-    ${tog('voiceName', 'Namen vorlesen', 'Vor dem Haus: Hausnummer + Name ansagen')}
-    ${tog('vibrate', 'Vibrieren bei Ankunft')}
-    ${tog('keepAwake', 'Bildschirm anlassen', 'Während der Route geht das Handy nicht aus')}
+    <div class="row"><div class="l">Tempo</div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
+    <div class="row"><div class="l">Zeit pro Briefkasten</div><div class="step"><button data-s="stopSec" data-d="-5">−</button><span>${st.stopSec} s</span><button data-s="stopSec" data-d="5">+</button></div></div>
+    <div class="row"><div class="l">Berg vermeiden</div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="row"><div class="l">Ankunft ab</div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
+    ${tog('autoDone', 'Automatisch abhaken')}
+    <div id="eAutoBox" style="${st.autoDone ? '' : 'display:none'}">
+      <div class="row"><div class="l">Stehen bleiben</div><div class="step"><button data-s="autoSec" data-d="-1">−</button><span>${st.autoSec} s</span><button data-s="autoSec" data-d="1">+</button></div></div>
+      <div class="row"><div class="l">Abstand</div><div class="seg" id="eARad">${[10, 15, 25].map(v => `<button data-v="${v}" class="${st.autoRad === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
+    </div>
+    <div class="set-h">Ansagen</div>
+    ${tog('voiceNav', 'Sprachansagen')}
+    ${tog('voiceName', 'Name vorlesen')}
+    ${tog('vibrate', 'Vibrieren')}
+    <div class="set-h">Anzeige</div>
+    <div class="row"><div class="l">Design</div><div class="seg" id="eTheme">${[['light', 'Hell'], ['dark', 'Dunkel'], ['system', 'System']].map(([v, l]) => `<button data-v="${v}" class="${st.theme === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+    ${tog('keepAwake', 'Bildschirm bleibt an')}
+    <div class="set-h">Erinnerung Austragetag</div>
+    ${tog('dayOn', 'An')}
+    <div class="row"><div class="l">Nächster Termin</div><input type="date" id="eDay" class="date-in" value="${st.dayNext || ''}"></div>
+    <div class="row"><div class="l">Alle</div><div class="seg" id="eEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.dayEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="row"><div class="l">Wann</div><div class="seg" id="eWhen">${[['before', 'Tag davor'], ['same', 'Am Tag']].map(([v, l]) => `<button data-v="${v}" class="${st.remindWhen === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eTime" class="date-in" value="${st.remindTime}"></div>
+    <div class="field"><label>Text</label><input id="eText" value="${esc(st.remindText)}"></div>
+    <div class="link-row" id="eCalG">${ic.clock}<span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+    <div class="link-row" id="eCalI">${ic.download}<span>Kalender-Datei (.ics)</span></div>
+    <div class="set-h">Erinnerung Backup</div>
+    ${tog('backupOn', 'An')}
+    <div class="row"><div class="l">Alle</div><div class="seg" id="eBEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.backupEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="row"><div class="l">Tag</div><select id="eBDay" class="date-in">${['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'].map((l, i) => `<option value="${i}" ${st.backupDay === i ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eBTime" class="date-in" value="${st.backupTime}"></div>
+    <div class="link-row" id="eBCalG">${ic.clock}<span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+    <div class="link-row" id="eBCalI">${ic.download}<span>Kalender-Datei (.ics)</span></div>
     <div class="set-h">Daten</div>
-    <div class="note-box">Deine Adressen und Namen sind nur auf diesem Handy gespeichert – nicht im Internet. Mach ab und zu ein Backup.</div>
-    <div class="link-row" id="eBak">${ic.download}<span>Backup herunterladen<br><small style="color:var(--mut);font-size:15px">${S.lastBackup ? 'zuletzt ' + fmtDate(S.lastBackup) : 'noch nie gemacht'}</small></span></div>
+    <div class="link-row" id="eBak">${ic.download}<span>Backup speichern<br><small style="color:var(--mut);font-size:15px">${S.lastBackup ? 'zuletzt ' + fmtDate(S.lastBackup) : 'noch keins'}</small></span></div>
     <div class="link-row" id="eRes">${ic.upload}<span>Backup laden</span></div>
     <div class="link-row red" id="eWipe">${ic.trash}<span>Alles löschen</span></div>
-    <div class="help" style="font-size:13px;padding-top:18px">Oli Zeitung ${VERSION} · Karte © OpenStreetMap-Mitwirkende, Esri · Wege: OSRM (FOSSGIS) · Höhen: Open-Meteo</div>
+    <div class="help" style="font-size:13px;padding-top:18px">Oli Zeitung ${VERSION} · © OpenStreetMap, Esri, OSRM, Open-Meteo</div>
   </div>`, { onClose: () => { drawMarkers(); renderSheet(); } });
   const el = pg.el; const re = () => { pg.close(); openSettings(); };
-  el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st[b.dataset.t] = !st[b.dataset.t]; b.classList.toggle('on', st[b.dataset.t]); save(); if (b.dataset.t === 'returnHome') S.routes.forEach(r => r.optimized && (r.optimized = false)); });
-  el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const k = b.dataset.s; st[k] = k === 'speed' ? clamp(st[k] + +b.dataset.d, 6, 25) : clamp(st[k] + +b.dataset.d, 5, 120); b.parentNode.querySelector('span').textContent = st[k] + (k === 'speed' ? ' km/h' : ' s'); S.routes.forEach(recomputePlan); save(); });
+  el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st[b.dataset.t] = !st[b.dataset.t]; b.classList.toggle('on', st[b.dataset.t]); save(); if (b.dataset.t === 'autoDone') $('#eAutoBox', el).style.display = st.autoDone ? '' : 'none'; if (b.dataset.t === 'returnHome') S.routes.forEach(r => r.optimized && (r.optimized = false)); });
+  el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const k = b.dataset.s; st[k] = k === 'speed' ? clamp(st[k] + +b.dataset.d, 6, 25) : k === 'autoSec' ? clamp(st[k] + +b.dataset.d, 2, 60) : clamp(st[k] + +b.dataset.d, 5, 120); b.parentNode.querySelector('span').textContent = st[k] + (k === 'speed' ? ' km/h' : ' s'); S.routes.forEach(recomputePlan); save(); });
   el.querySelectorAll('#eHill button').forEach(b => b.onclick = () => { st.hill = +b.dataset.v; el.querySelectorAll('#eHill button').forEach(x => x.classList.toggle('sel', x === b)); S.routes.forEach(r => r.optimized = false); save(); toast('Bitte Route neu optimieren'); });
   el.querySelectorAll('#eRad button').forEach(b => b.onclick = () => { st.radius = +b.dataset.v; el.querySelectorAll('#eRad button').forEach(x => x.classList.toggle('sel', x === b)); save(); });
   $('#eHome', el).onclick = async () => {
-    const v = await dialog({ title: 'Startadresse', text: 'Straße Nr, PLZ Ort – z. B. „Musterweg 1, 12345 Musterstadt“:', input: { value: st.home.label ? st.home.label + ', ' + st.home.zip + ' ' + st.home.city : '', placeholder: 'Straße Nr, PLZ Ort' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Suchen', cls: 'btn-p', value: true }] });
+    const v = await dialog({ title: 'Startadresse', input: { value: st.home.label ? st.home.label + ', ' + st.home.zip + ' ' + st.home.city : '', placeholder: 'Straße Nr, PLZ Ort' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Suchen', cls: 'btn-p', value: true }] });
     if (!v) return; st.home = Object.assign(parseAddr(v), { lat: null, lon: null, ele: null });
     const b = busy('Startadresse wird gesucht'); await geocodeHome(); b.close();
     S.routes.forEach(r => { r.optimized = false; r.matrix = null; }); save();
     toast(st.home.lat != null ? 'Gefunden ✓ – bitte Routen neu optimieren' : 'Nicht gefunden – kein Internet?'); re();
   };
   const segSet = (sel, key, num) => el.querySelectorAll(sel + ' button').forEach(b => b.onclick = () => { st[key] = num ? +b.dataset.v : b.dataset.v; el.querySelectorAll(sel + ' button').forEach(x => x.classList.toggle('sel', x === b)); save(); });
+  segSet('#eARad', 'autoRad', true);
+  el.querySelectorAll('#eTheme button').forEach(b => b.onclick = () => { st.theme = b.dataset.v; el.querySelectorAll('#eTheme button').forEach(x => x.classList.toggle('sel', x === b)); save(); applyTheme(); });
   segSet('#eEvery', 'dayEvery', true); segSet('#eWhen', 'remindWhen'); segSet('#eBEvery', 'backupEvery', true);
   $('#eDay', el).onchange = e => { st.dayNext = e.target.value || null; save(); };
   $('#eTime', el).onchange = e => { st.remindTime = e.target.value || '18:00'; save(); };
@@ -1409,7 +1478,7 @@ function openHelp() {
 
 /* ---------- Start ---------- */
 async function main() {
-  load();
+  load(); applyTheme();
   initMap();
   $('#btnMenu').innerHTML = ic.menu; $('#btnLayer').innerHTML = ic.layers; $('#btnLocate').innerHTML = ic.locate; $('#btnFit').innerHTML = ic.map;
   $('#btnMenu').onclick = openDrawer; $('#scrim').onclick = closeDrawer;
@@ -1426,7 +1495,7 @@ async function main() {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (S.routes.length) setTimeout(startupReminders, 800);
-  if (!S.routes.length) setTimeout(() => dialog({ title: 'Hallo 👋', text: 'Leg jetzt deine erste Route an. Am besten mit deiner CSV-Datei (Adresse;PLZ;Ort;Name).', buttons: [{ label: 'Später', value: 0 }, { label: 'Route erstellen', cls: 'btn-p', value: 1 }] }).then(v => v && createRoute()), 400);
+  if (!S.routes.length) setTimeout(() => dialog({ title: 'Hallo 👋', buttons: [{ label: 'Später', value: 0 }, { label: 'Route erstellen', cls: 'btn-p', value: 1 }] }).then(v => v && createRoute()), 400);
 }
 window.addEventListener('error', e => { console.error(e.error || e.message); });
 main();

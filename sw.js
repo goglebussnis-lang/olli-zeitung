@@ -1,5 +1,5 @@
 /* Oli Zeitung – Offline-Speicher */
-const APP = 'olli-app-v11', TILES = 'olli-tiles-v2';
+const APP = 'olli-app-v12', TILES = 'olli-tiles-v2';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'leaflet.js', 'leaflet.css', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(APP).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== APP && k !== TILES).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
