@@ -1,6 +1,6 @@
 {
-  "name": "Olli Zeitung",
-  "short_name": "Olli Zeitung",
+  "name": "Oli Zeitung",
+  "short_name": "Oli Zeitung",
   "description": "Austrage-Routen für Zeitungen und Flyer",
   "start_url": "./",
   "scope": "./",
