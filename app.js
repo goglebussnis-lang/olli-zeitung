@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '1.9';
+const VERSION = '2.0';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -120,7 +120,7 @@ const DEFAULTS = {
     home: { label: '', zip: '', city: '', lat: null, lon: null, ele: null },
     returnHome: true, speed: 18, stopSec: 15, hill: 1, radius: 25,
     voiceNav: false, voiceName: true, vibrate: true, keepAwake: true, autoNext: false,
-    lockAlways: false, driveMode: false, sat: false,
+    driveMode: false, sat: false,
     dayOn: true, dayNext: null, dayEvery: 14, remindWhen: 'before', remindTime: '18:00', remindText: 'Zeitung austragen 📰',
     backupOn: true, backupEvery: 14, backupDay: 0, backupTime: '19:00'
   },
@@ -1293,9 +1293,6 @@ function openSettings() {
     ${tog('voiceName', 'Namen vorlesen', 'Vor dem Haus: Hausnummer + Name ansagen')}
     ${tog('vibrate', 'Vibrieren bei Ankunft')}
     ${tog('keepAwake', 'Bildschirm anlassen', 'Während der Route geht das Handy nicht aus')}
-    <div class="set-h">Sicherheit</div>
-    ${tog('lockAlways', 'Passwort bei jedem Öffnen', 'Sonst merkt sich dein Handy das Passwort')}
-    <div class="link-row" id="ePw">${ic.lock}<span>Passwort ändern</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
     <div class="set-h">Daten</div>
     <div class="note-box">Deine Adressen und Namen sind nur auf diesem Handy gespeichert – nicht im Internet. Mach ab und zu ein Backup.</div>
     <div class="link-row" id="eBak">${ic.download}<span>Backup herunterladen<br><small style="color:var(--mut);font-size:15px">${S.lastBackup ? 'zuletzt ' + fmtDate(S.lastBackup) : 'noch nie gemacht'}</small></span></div>
@@ -1315,7 +1312,6 @@ function openSettings() {
     S.routes.forEach(r => { r.optimized = false; r.matrix = null; }); save();
     toast(st.home.lat != null ? 'Gefunden ✓ – bitte Routen neu optimieren' : 'Nicht gefunden – kein Internet?'); re();
   };
-  $('#ePw', el).onclick = async () => { const p = await dialog({ title: 'Neues Passwort', input: { type: 'password', placeholder: 'Neues Passwort' }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Speichern', cls: 'btn-p', value: true }] }); if (p) { S.pw = await hashPw(p); save(true); toast('Passwort geändert'); } };
   const segSet = (sel, key, num) => el.querySelectorAll(sel + ' button').forEach(b => b.onclick = () => { st[key] = num ? +b.dataset.v : b.dataset.v; el.querySelectorAll(sel + ' button').forEach(x => x.classList.toggle('sel', x === b)); save(); });
   segSet('#eEvery', 'dayEvery', true); segSet('#eWhen', 'remindWhen'); segSet('#eBEvery', 'backupEvery', true);
   $('#eDay', el).onchange = e => { st.dayNext = e.target.value || null; save(); };
@@ -1330,7 +1326,7 @@ function openSettings() {
   $('#eBak', el).onclick = () => backupNow();
   $('#eRes', el).onclick = () => {
     const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
-    inp.onchange = async () => { try { const d = JSON.parse(await inp.files[0].text()); if (!Array.isArray(d.routes)) throw 0; if (!(await confirmDlg('Backup laden?', `${d.routes.length} Routen. Deine jetzigen Daten werden ersetzt.`, 'Laden'))) return; const pw = S.pw; S = Object.assign(structuredClone(DEFAULTS), d, { pw }); S.settings = Object.assign(structuredClone(DEFAULTS.settings), d.settings); save(true); location.reload(); } catch (e) { toast('Das ist keine gültige Backup-Datei'); } };
+    inp.onchange = async () => { try { const d = JSON.parse(await inp.files[0].text()); if (!Array.isArray(d.routes)) throw 0; if (!(await confirmDlg('Backup laden?', `${d.routes.length} Routen. Deine jetzigen Daten werden ersetzt.`, 'Laden'))) return; S = Object.assign(structuredClone(DEFAULTS), d); S.settings = Object.assign(structuredClone(DEFAULTS.settings), d.settings); save(true); location.reload(); } catch (e) { toast('Das ist keine gültige Backup-Datei'); } };
     inp.click();
   };
   $('#eWipe', el).onclick = async () => { if (await confirmDlg('Wirklich alles löschen?', 'Alle Routen, Namen und Einstellungen werden von diesem Handy gelöscht.', 'Alles löschen', 'btn-r')) { localStorage.removeItem(KEY); localStorage.removeItem('olli.unlocked'); location.reload(); } };
@@ -1411,43 +1407,9 @@ function openHelp() {
   </div>`);
 }
 
-/* ---------- Passwort ---------- */
-async function hashPw(p) {
-  const salt = 'olli-zeitung-' + (S.salt || (S.salt = uid()));
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(salt + p));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-function lockScreen() {
-  return new Promise(resolve => {
-    const el = $('#lock'); const first = !S.pw;
-    let unlocked = false; try { unlocked = localStorage.getItem('olli.unlocked') === S.pw && !!S.pw; } catch (e) { }
-    if (unlocked && !S.settings.lockAlways) return resolve();
-    el.innerHTML = `<img src="icon-192.png" alt=""><h1>Oli Zeitung</h1>
-      <p>${first ? 'Willkommen! Leg einmal ein Passwort fest. Dein Handy merkt es sich danach.' : 'Bitte Passwort eingeben.'}</p>
-      <input id="pw1" type="password" placeholder="${first ? 'Neues Passwort' : 'Passwort'}" autocomplete="${first ? 'new-password' : 'current-password'}">
-      ${first ? '<input id="pw2" type="password" placeholder="Passwort wiederholen" autocomplete="new-password">' : ''}
-      <button class="btn btn-p" id="pwGo">${first ? 'Festlegen' : 'Entsperren'}</button><div class="err" id="pwErr"></div>`;
-    el.classList.add('show');
-    const go = async () => {
-      const p1 = $('#pw1').value; const err = $('#pwErr');
-      if (first) {
-        if (p1.length < 4) return err.textContent = 'Mindestens 4 Zeichen';
-        if (p1 !== $('#pw2').value) return err.textContent = 'Die Passwörter sind nicht gleich';
-        S.pw = await hashPw(p1); save(true);
-      } else if ((await hashPw(p1)) !== S.pw) { err.textContent = 'Falsches Passwort'; $('#pw1').value = ''; return; }
-      try { localStorage.setItem('olli.unlocked', S.pw); } catch (e) { }
-      el.classList.remove('show'); el.innerHTML = ''; resolve();
-    };
-    $('#pwGo').onclick = go;
-    el.querySelectorAll('input').forEach(i => i.onkeydown = e => { if (e.key === 'Enter') go(); });
-    setTimeout(() => $('#pw1') && $('#pw1').focus(), 200);
-  });
-}
-
 /* ---------- Start ---------- */
 async function main() {
   load();
-  await lockScreen();
   initMap();
   $('#btnMenu').innerHTML = ic.menu; $('#btnLayer').innerHTML = ic.layers; $('#btnLocate').innerHTML = ic.locate; $('#btnFit').innerHTML = ic.map;
   $('#btnMenu').onclick = openDrawer; $('#scrim').onclick = closeDrawer;
