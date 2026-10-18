@@ -331,7 +331,7 @@ body.nav .fab-wrap{display:none}
 @media (max-height:700px){.dv-hn{font-size:80px}.drive .ar-name{font-size:34px;padding:12px}.dv-dir b{font-size:28px}}
 
 .date-in{border:1.5px solid var(--line);border-radius:12px;padding:8px 10px;font-size:16px;font-family:inherit;color:var(--ink);background:var(--card);max-width:170px}
-.dr-day{background:var(--blue-l);color:#1e3a8a;border-radius:14px;padding:12px 14px;margin:0 4px 14px;font-size:16px}
+.dr-day{background:var(--blue-l);color:#1e3a8a;border-radius:14px;padding:14px 12px;margin:0 4px 14px;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.1px}
 
 /* Dunkles Design */
 :root[data-theme="dark"]{
@@ -358,3 +358,24 @@ body.nav .fab-wrap{display:none}
 [data-theme="dark"] .fab-label{background:rgba(26,33,48,.92)}
 [data-theme="dark"] .cnt{background:#4a3410;color:#ffcf7a}
 [data-theme="dark"] .pin.done{background:#2a3344}
+
+.dv-side{background:rgba(255,255,255,.95);color:var(--green)}
+.dv-side b{font-size:40px}
+.dv-side small{color:#14532d}
+
+/* Kartenknöpfe: nur der Knopf selbst ist antippbar */
+.fabs-right,.fab-wrap{pointer-events:none}
+.fabs-right .fab{pointer-events:auto}
+/* Einstellungen als Karten */
+.set-page{background:var(--bg);padding:12px 12px calc(24px + var(--safe-b))}
+.set-card{background:var(--card);border-radius:18px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.06);border:1px solid var(--line)}
+.set-ct{display:flex;align-items:center;gap:10px;padding:14px 16px 6px;color:var(--blue);font-weight:700;font-size:15px;text-transform:uppercase;letter-spacing:.4px}
+.set-ct svg{width:20px;height:20px}
+.set-card .row{padding:10px 16px;min-height:58px;border-top:1px solid var(--line)}
+.set-card .set-ct + .row,.set-card .set-ct + .link-row{border-top:0}
+.set-card .link-row{padding:15px 16px;border-bottom:0;border-top:1px solid var(--line)}
+.set-card .field{border-bottom:0;border-top:1px solid var(--line);padding:4px 16px}
+.set-card .row .l{font-size:18px}
+.set-card .row .v{color:var(--ink);font-weight:600}
+.set-card .sub{color:var(--mut);font-size:15px}
+.set-card .seg button{padding:9px 11px;font-size:15px}

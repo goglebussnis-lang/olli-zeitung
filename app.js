@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '2.2';
+const VERSION = '2.3';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -84,6 +84,8 @@ const ic = {
   straight: I('<path d="M12 20V4M7 9l5-5 5 5"/>', 2.6),
   uturn: I('<path d="M8 20V9a4 4 0 0 1 8 0v6M12 11l4 4 4-4"/>', 2.6),
   drive: I('<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="m12 17 4.5-5"/><circle cx="12" cy="17" r="1.4" fill="currentColor"/><path d="M6.5 11.5 8 12.5M12 7v1.8M17.5 11.5 16 12.5"/>', 2.2),
+  left2: I('<path d="M20 12H5M11 5l-7 7 7 7"/>', 2.8),
+  right2: I('<path d="M4 12h15M13 5l7 7-7 7"/>', 2.8),
   round: I('<circle cx="12" cy="10" r="4"/><path d="M12 14v7M15 7l4-4M19 7V3h-4"/>', 2.4)
 };
 
@@ -121,7 +123,7 @@ const DEFAULTS = {
     returnHome: true, speed: 18, stopSec: 15, hill: 1, radius: 25,
     voiceNav: false, voiceName: true, vibrate: true, keepAwake: true, autoNext: false,
     driveMode: false, sat: false,
-    theme: 'system', autoDone: false, autoSec: 8, autoRad: 15,
+    theme: 'system', clickSound: true, autoDone: false, autoSec: 8, autoRad: 15,
     dayOn: true, dayNext: null, dayEvery: 14, remindWhen: 'before', remindTime: '18:00', remindText: 'Zeitung austragen 📰',
     backupOn: true, backupEvery: 14, backupDay: 0, backupTime: '19:00'
   },
@@ -359,13 +361,14 @@ function fitAll(pad = true) {
 }
 
 /* ---------- GPS ---------- */
-let pos = null, heading = null, watchId = null, follow = false;
+let pos = null, gpsSpeed = null, heading = null, watchId = null, follow = false;
 function startGPS() {
   if (watchId != null || !navigator.geolocation) return;
   watchId = navigator.geolocation.watchPosition(p => {
     const c = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() };
     if (!acceptFix(c)) return;
     pos = c;
+    gpsSpeed = p.coords.speed != null && !isNaN(p.coords.speed) ? p.coords.speed : null;
     if (p.coords.heading != null && !isNaN(p.coords.heading) && p.coords.speed > 0.8) heading = p.coords.heading;
     drawMe();
     if (S.run) onRunPosition();
@@ -599,7 +602,7 @@ function openDrawer() {
   $('#drawer').innerHTML = `
     <div class="dr-top"><div class="dr-icons"><button class="icon-btn" id="dSet">${ic.gear}</button></div>
       <div class="dr-user"><img src="icon-192.png" alt=""><div><h2>Oli Zeitung</h2><p>Kostenlos · für immer 😉</p></div></div></div>
-    <div class="dr-list">${(() => { const d = S.settings.dayOn ? nextDeliveryDay() : null; return d ? `<div class="dr-day">📰 Nächster Austragetag ${dayIn(d)}</div>` : ''; })()}<div class="dr-h">Meine Routen</div>
+    <div class="dr-list">${(() => { const d = S.settings.dayOn ? nextDeliveryDay() : null; return d ? `<div class="dr-day">📰 Austragetag ${dayIn(d)}</div>` : ''; })()}<div class="dr-h">Meine Routen</div>
       ${routes.length ? routes.map(r => `<div class="route-it ${r.id === S.activeId ? 'act' : ''}" data-id="${r.id}"><span class="d">${fmtDate(r.created)}</span><div class="n"><b>${esc(r.name)}</b><small>${plural(r.stops.length, 'Stopp', 'Stopps')}${r.plan ? ' · ' + fmtDur(r.plan.total) : ''}${r.history && r.history.length ? ' · ' + r.history.length + '× gefahren' : ''}</small></div><button class="icon-btn" data-m="${r.id}">${ic.more}</button></div>`).join('') : '<div class="empty" style="padding:12px">Noch keine Routen.</div>'}
     </div>
     <div class="dr-foot"><button class="btn btn-p" id="dNew">${ic.plus} Route erstellen</button></div>`;
@@ -626,9 +629,28 @@ async function createRoute() {
   const how = await dialog({ title: 'Adressen hinzufügen', buttons: [{ label: 'Einzeln suchen', value: 's' }, { label: 'CSV laden', value: 'c', cls: 'btn-p' }] });
   if (how === 'c') importCSV(); else if (how === 's') { setSheet(true); setTimeout(() => $('#q').focus(), 280); }
 }
+function routeInfo(r) {
+  const L = learned(r), hist = r.history || [], last = hist[hist.length - 1];
+  const sheets = r.stops.reduce((a, s) => a + (s.count || 1), 0);
+  const row = (l, v) => `<div class="row"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+  openPage(`<div class="page-h"><span style="width:46px"></span><h1>${esc(r.name)}</h1><button class="icon-btn" data-close>${ic.x}</button></div>
+  <div class="page-b set-page"><div class="set-card">
+    ${row('Stopps', r.stops.length)}${row('Blätter', sheets)}
+    ${row('Strecke', r.plan ? fmtKm(r.plan.dist) : '–')}${row('Höhenmeter', r.plan ? r.plan.up + ' m' : '–')}
+    ${row('Geschätzte Dauer', r.plan ? fmtDur(r.plan.total) : '–')}
+  </div><div class="set-card">
+    ${row('Gefahrene Touren', hist.length)}
+    ${row('Ø pro Briefkasten', Math.round(L.b) + ' s' + (L.n ? '' : ' (Start)'))}
+    ${row('Ø Tempo', (S.settings.speed / L.a).toFixed(1).replace('.', ',') + ' km/h' + (L.n ? '' : ' (Start)'))}
+    ${row('Gelernt aus', plural(L.n, 'Tour', 'Touren'))}
+  </div>${last ? `<div class="set-card">
+    ${row('Letzte Tour', fmtDate(last.date))}${row('Gebraucht', fmtDur(last.sec))}${last.planned ? row('Geschätzt', fmtDur(last.planned)) : ''}
+  </div>` : ''}</div>`, { sheetlike: true });
+}
 function routeItemMenu(anchor, id) {
   const r = S.routes.find(x => x.id === id);
   popMenu(anchor, [
+    { label: 'Info', icon: ic.help, do: () => { closeDrawer(); routeInfo(r); } },
     { label: 'Umbenennen', icon: ic.edit, do: async () => { const n = await dialog({ title: 'Umbenennen', input: { value: r.name }, buttons: [{ label: 'Abbrechen', value: false }, { label: 'Speichern', cls: 'btn-p', value: true }] }); if (n) { r.name = n; save(); openDrawer(); renderSheet(); } } },
     { label: 'Duplizieren', icon: ic.copy, do: () => { const c = structuredClone(r); c.id = uid(); c.name += ' (Kopie)'; c.created = Date.now(); c.history = []; c.stops.forEach(s => { const old = s.id; s.id = uid(); if (c.order) c.order = c.order.map(x => x === old ? s.id : x); s.status = 'open'; }); S.routes.push(c); save(); openDrawer(); } },
     { label: 'Als CSV exportieren', icon: ic.download, do: () => exportCSV(r) },
@@ -638,6 +660,7 @@ function routeItemMenu(anchor, id) {
 function routeMenu(anchor) {
   const r = R(); if (!r) return createRoute();
   popMenu(anchor, [
+    { label: 'Info', icon: ic.help, do: () => routeInfo(r) },
     { label: 'CSV-Datei laden', icon: ic.csv, do: importCSV },
     { label: 'Route optimieren', icon: ic.opt, do: () => optimize(r, true) },
     { label: 'Reihenfolge umdrehen', icon: ic.reverse, do: () => { if (!r.optimized) return toast('Erst optimieren'); r.order.reverse(); r.geom && r.geom.reverse(); recomputePlan(r); save(); drawMarkers(); drawRouteLine(); renderSheet(); toast('Reihenfolge umgedreht'); } },
@@ -776,13 +799,20 @@ function costMatrix(r, pts) {
   }
   return c;
 }
+/* Gelernte Werte pro Route (Ø der letzten 5 Touren) */
+function learned(r) {
+  const runs = (r && r.learn && r.learn.runs) || [];
+  if (!runs.length) return { a: 1, b: 15, n: 0 };
+  return { a: runs.reduce((x, k) => x + k.a, 0) / runs.length, b: runs.reduce((x, k) => x + k.b, 0) / runs.length, n: runs.length };
+}
+const stopTime = (r, s) => learned(r).b * (s.count > 1 ? 1 + .3 * (s.count - 1) : 1);
 function planFor(r, pts, idxOrder, returnHome) {
-  const st = S.settings, f = 15 / st.speed;
+  const st = S.settings, f = 15 / st.speed * learned(r).a;
   let dur = 0, dist = 0, up = 0, prev = 0; const legs = [];
   const step = (a, b) => { const d = (r.matrix.dur[a][b] ?? hav(pts[a], pts[b]) * 1.4 / 4.2) * f; const m = r.matrix.dist[a][b] ?? hav(pts[a], pts[b]) * 1.4; dur += d; dist += m; if (pts[a].ele != null && pts[b].ele != null) up += Math.max(0, pts[b].ele - pts[a].ele); return d; };
   for (const k of idxOrder) { legs.push(step(prev, k)); prev = k; }
   let back = 0; if (returnHome) back = step(prev, 0);
-  const stopsT = idxOrder.length * st.stopSec + idxOrder.reduce((a, k) => a + ((pts[k].stopSec || 0) - (pts[k].stopSec ? st.stopSec : 0)), 0);
+  const stopsT = idxOrder.reduce((a, k) => a + stopTime(r, pts[k]), 0);
   return { drive: dur, total: dur + stopsT, dist, up: Math.round(up), legs, back, returnHome, endName: pts[prev].street || 'Start' };
 }
 function recomputePlan(r) {
@@ -878,7 +908,6 @@ function openStop(id) {
       <div class="row">${ic.copy}<div class="l">Anzahl Blätter</div><div class="step"><button id="cM">−</button><span id="cV">${s.count || 1}</span><button id="cP">+</button></div></div>
       <div class="field"><label>Notizen</label><textarea id="sNote" rows="2" >${esc(s.note)}</textarea></div>
       <div class="row">${ic.sort}<div class="l">Reihenfolge</div><div class="seg" id="sPos">${[['first', 'Erster'], ['auto', 'Auto'], ['last', 'Letzter']].map(([v, l]) => `<button data-v="${v}" class="${(s.pos || 'auto') === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-      <div class="row">${ic.timer}<div class="l">Haltezeit</div><div class="step"><button id="tM">−</button><span id="tV">${s.stopSec || S.settings.stopSec} s</span><button id="tP">+</button></div></div>
       <div class="row">${ic.check}<div class="l">Erledigt</div><button class="tog ${s.status === 'done' ? 'on' : ''}" id="sDone"></button></div>
       <div class="grey" style="margin-top:8px">
         <div class="link-row" id="sMove">${ic.move}<span>Position auf Karte korrigieren</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
@@ -896,8 +925,6 @@ function openStop(id) {
   el.querySelectorAll('#sPos button').forEach(b => b.onclick = () => { s.pos = b.dataset.v; el.querySelectorAll('#sPos button').forEach(x => x.classList.toggle('sel', x === b)); if (r.optimized) { r.optimized = false; toast('Bitte neu optimieren'); renderFooter(); } save(); });
   const setC = d => { s.count = clamp((s.count || 1) + d, 1, 20); $('#cV', el).textContent = s.count; save(); };
   $('#cM', el).onclick = () => setC(-1); $('#cP', el).onclick = () => setC(1);
-  const setT = d => { s.stopSec = clamp((s.stopSec || S.settings.stopSec) + d, 5, 300); $('#tV', el).textContent = s.stopSec + ' s'; recomputePlan(r); save(); };
-  $('#tM', el).onclick = () => setT(-5); $('#tP', el).onclick = () => setT(5);
   $('#sDone', el).onclick = e => { s.status = s.status === 'done' ? 'open' : 'done'; e.currentTarget.classList.toggle('on', s.status === 'done'); save(); };
   $('#sMove', el).onclick = () => { pg.close(); dragStop(s); };
   $('#sAddr', el).onclick = async () => {
@@ -949,7 +976,7 @@ async function startRun(id, skipOpt) {
     if (!v) return;
     if (v === 'new') r.stops.forEach(s => s.status = 'open');
   }
-  S.run = { routeId: id, started: Date.now(), paused: 0, pausedAt: null, doneLog: [], plannedTotal: r.plan.total };
+  S.run = { routeId: id, started: Date.now(), paused: 0, pausedAt: null, doneLog: [], plannedTotal: r.plan.total, segs: [], segStart: Date.now(), segPaused: 0, segIdle: 0, lastId: null, dist: 0 };
   save(true); enterNav();
   lastStreet = null;
   speak('Route ' + r.name + ' gestartet. ' + plural(openStops().length, 'Stopp', 'Stopps') + '.', true);
@@ -969,11 +996,20 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 /* Automatisch abhaken: nah am Haus + stehen geblieben */
 let dwell = null, autoTimer = null;
 function autoTick() {
+  idleTick();
   const st = S.settings;
   if (!st.autoDone || !S.run || S.run.pausedAt || !pos) { dwell = null; return; }
   const n = nextStop(); if (!n) { dwell = null; return; }
-  if (hav(pos, n) > st.autoRad + Math.min(10, (pos.acc || 0) / 2)) { dwell = null; return; }
-  if (!dwell || dwell.id !== n.id || hav(pos, dwell.anchor) > 10) { dwell = { id: n.id, anchor: { lat: pos.lat, lon: pos.lon }, t: Date.now() }; return; }
+  const acc = Math.min(15, pos.acc || 10);
+  const green = arriveShownFor === n.id || driveArrived === n.id;
+  const inRange = hav(pos, n) <= st.autoRad + acc || (green && hav(pos, n) <= st.radius + acc);
+  if (!inRange) { if (dwell && dwell.id === n.id && ++dwell.out <= 3) return; dwell = null; return; }
+  const tol = Math.max(15, acc * 1.5);
+  if (!dwell || dwell.id !== n.id) { dwell = { id: n.id, anchor: { lat: pos.lat, lon: pos.lon }, t: Date.now(), out: 0, moved: 0 }; return; }
+  dwell.out = 0;
+  const moving = hav(pos, dwell.anchor) > tol || (gpsSpeed != null && gpsSpeed > 2);
+  if (moving) { if (++dwell.moved >= 2) { dwell.anchor = { lat: pos.lat, lon: pos.lon }; dwell.t = Date.now(); dwell.moved = 0; } return; }
+  dwell.moved = 0;
   if (Date.now() - dwell.t >= st.autoSec * 1000) { dwell = null; driveArrived = null; markDone(n); toast('✓ ' + n.street); }
 }
 function enterNav() {
@@ -994,16 +1030,16 @@ function exitNav() {
 }
 function remainingEstimate() {
   const r = runRoute(); if (!r || !r.plan) return null;
-  const st = S.settings, f = 15 / st.speed;
+  const st = S.settings, f = 15 / st.speed * learned(r).a;
   const stops = r.stops.filter(s => s.lat != null); const pts = [st.home].concat(stops);
   const idx = new Map(stops.map((s, i) => [s.id, i + 1]));
   const open = openStops(); if (!open.length) return { sec: 0, dist: 0 };
   let sec = 0, dist = 0;
   // bis zum nächsten Stopp
   if (leg && leg.target === open[0].id && pos) { sec += leg.dur * f * (leg.remainFrac ?? 1); dist += leg.dist * (leg.remainFrac ?? 1); }
-  else if (pos) { const d = hav(pos, open[0]) * 1.4; sec += d / (st.speed / 3.6); dist += d; }
+  else if (pos) { const d = hav(pos, open[0]) * 1.4; sec += d / (st.speed / 3.6) * learned(r).a; dist += d; }
   for (let i = 0; i < open.length; i++) {
-    sec += open[i].stopSec || st.stopSec;
+    sec += stopTime(r, open[i]);
     if (i > 0) { const a = idx.get(open[i - 1].id), b = idx.get(open[i].id); sec += (r.matrix.dur[a][b] ?? 0) * f; dist += r.matrix.dist[a][b] ?? 0; }
   }
   if (r.plan.returnHome) { const a = idx.get(open[open.length - 1].id); sec += (r.matrix.dur[a][0] ?? 0) * f; dist += r.matrix.dist[a][0] ?? 0; }
@@ -1024,14 +1060,12 @@ function renderNavTop() {
   if (!n) { $('#navTop').innerHTML = `<div class="nt-card"><div class="nt-body"><div class="nt-num" style="background:var(--green)">${ic.check.replace('<svg', '<svg width="26" height="26"')}</div><div class="nt-main"><div class="a">Alle Briefkästen erledigt!</div><div class="s">${r.plan.returnHome ? 'Jetzt zurück zum ' + esc(S.settings.home.label) : 'Fertig 🎉'}</div></div></div></div>`; return; }
   const list = stopsOrdered(r); const no = list.indexOf(n) + 1;
   const d = wayLeft(n);
-  const stp0 = leg && leg.target === n.id && leg.steps ? currentStep() : null;
-  const arrow = stp0 && !/Ziel/.test(stp0.text) ? stp0.icon : ic.straight;
   let man = '';
   if (leg && leg.steps && S.settings.voiceNav) {
     const stp = currentStep();
     if (stp) man = `<div class="man">${stp.icon}<div class="t">${stp.dist != null ? 'In ' + fmtKm(stp.dist) : ''}<small>${esc(stp.text)}</small></div></div>`;
   }
-  $('#navTop').innerHTML = `<div class="nt-card">${man}<div class="nt-body"><div class="nt-num">${no}</div><div class="nt-main"><div class="s">Nächster Stopp · ${no} von ${list.length}</div><div class="a">${esc(n.street)}</div>${n.name || n.count > 1 ? `<div class="n">${n.count > 1 ? `<span class="cnt">${n.count}×</span> ` : ''}${esc(n.name || '')}</div>` : ''}${n.note ? `<div class="o">📝 ${esc(n.note)}</div>` : ''}</div>${d != null ? `<div class="nt-dist"><span class="nt-arrow">${arrow}</span>${fmtKm(d)}</div>` : ''}</div></div>`;
+  $('#navTop').innerHTML = `<div class="nt-card">${man}<div class="nt-body"><div class="nt-num">${no}</div><div class="nt-main"><div class="s">Nächster Stopp · ${no} von ${list.length}</div><div class="a">${esc(n.street)}</div>${n.name || n.count > 1 ? `<div class="n">${n.count > 1 ? `<span class="cnt">${n.count}×</span> ` : ''}${esc(n.name || '')}</div>` : ''}${n.note ? `<div class="o">📝 ${esc(n.note)}</div>` : ''}</div>${d != null ? `<div class="nt-dist">${fmtKm(d)}</div>` : ''}</div></div>`;
   $('#navTop .nt-body').onclick = () => openDrive();
 }
 function renderNavBottom() {
@@ -1064,22 +1098,104 @@ function markDone(s, auto) {
   if (s.status === 'done') return;
   s.status = 'done'; S.run.doneLog.push({ id: s.id, t: Date.now(), prev: 'open' });
   if (S.run.pausedAt) togglePause();
+  recordSeg(s);
   save(); closeArrive();
+  clickSound();
   if (S.settings.vibrate && navigator.vibrate) navigator.vibrate(40);
   afterChange();
 }
 function skipStop(s) {
-  s.status = 'skip'; S.run.doneLog.push({ id: s.id, t: Date.now(), prev: 'open' }); save(); closeArrive();
+  s.status = 'skip'; S.run.doneLog.push({ id: s.id, t: Date.now(), prev: 'open' }); segReset(null); save(); closeArrive();
   toast('Übersprungen: ' + s.street); afterChange();
 }
 function undo() {
   const r = runRoute(); const l = S.run.doneLog.pop(); if (!l) return toast('Nichts zum Rückgängig machen');
-  const s = r.stops.find(x => x.id === l.id); if (s) s.status = 'open'; save(); toast('Rückgängig: ' + (s ? s.street : '')); afterChange();
+  const s = r.stops.find(x => x.id === l.id); if (s) s.status = 'open'; segReset(null); save(); toast('Rückgängig: ' + (s ? s.street : '')); afterChange();
 }
 function afterChange() {
   arriveShownFor = null; drawMarkers(); renderNav(); maybeLeg(true);
   const n = nextStop();
   if (!n) return finishRun();
+}
+/* Lernen: Zeit je Abschnitt messen (ohne Pausen und langes Stehen) */
+function baseDrive(r, fromId, toId) {
+  if (!r.matrix) return null;
+  const stops = r.stops.filter(x => x.lat != null), idx = new Map(stops.map((x, i) => [x.id, i + 1]));
+  const a = idx.get(fromId), b = idx.get(toId); if (a == null || b == null) return null;
+  const d = r.matrix.dur[a][b]; return d == null ? null : d * 15 / S.settings.speed;
+}
+function segReset(lastId) {
+  const R0 = S.run; if (!R0) return;
+  R0.segStart = Date.now(); R0.segPaused = R0.paused; R0.segIdle = 0; R0.lastId = lastId;
+}
+function recordSeg(s) {
+  const R0 = S.run, r = runRoute(); if (!R0 || !r) return;
+  if (!R0.segs) { R0.segs = []; segReset(null); }
+  if (R0.lastId) {
+    const T = (Date.now() - R0.segStart - (R0.paused - R0.segPaused)) / 1000 - R0.segIdle;
+    const D = baseDrive(r, R0.lastId, s.id);
+    if (D != null && T > 1) R0.segs.push({ T, D, N: s.count || 1 });
+  }
+  segReset(s.id);
+}
+function fitRun(segs) {
+  const fit = list => { let dd = 0, dn = 0, nn = 0, td = 0, tn = 0; for (const g of list) { dd += g.D * g.D; dn += g.D * g.N; nn += g.N * g.N; td += g.T * g.D; tn += g.T * g.N; } const det = dd * nn - dn * dn; if (Math.abs(det) < 1e-6) return null; return { a: (td * nn - tn * dn) / det, b: (tn * dd - td * dn) / det }; };
+  if (!segs || segs.length < 5) return null;
+  let f = fit(segs); if (!f) return null;
+  const res = segs.map(g => Math.abs(g.T - f.a * g.D - f.b * g.N)), med = res.slice().sort((x, y) => x - y)[Math.floor(res.length / 2)];
+  const kept = segs.filter((g, i) => res[i] <= Math.max(20, med * 3));
+  if (kept.length >= 5) f = fit(kept) || f;
+  return { a: clamp(f.a, .5, 2.5), b: clamp(f.b, 5, 60), n: segs.length };
+}
+function learnFromRun(r) {
+  const f = fitRun(S.run && S.run.segs); if (!f) return false;
+  r.learn = r.learn || { runs: [] };
+  r.learn.runs = r.learn.runs.concat({ a: f.a, b: f.b, date: Date.now() }).slice(-5);
+  recomputePlan(r); return true;
+}
+let idleT = null;
+function idleTick() {
+  const R0 = S.run; if (!R0 || R0.pausedAt || !pos) { idleT = null; return; }
+  if (!idleT || hav(pos, idleT.p) > Math.max(15, (pos.acc || 0) * 1.5)) { idleT = { p: { lat: pos.lat, lon: pos.lon }, t: Date.now() }; return; }
+  if (Date.now() - idleT.t > 120000) R0.segIdle = (R0.segIdle || 0) + 1;
+}
+/* Sanfter Klick-Ton */
+let actx = null;
+function clickSound() {
+  if (!S.settings.clickSound) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const t = actx.currentTime;
+    [[880, 0], [1320, .07]].forEach(([fr, d]) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = fr;
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(0.18, t + d + .01); g.gain.exponentialRampToValueAtTime(0.0001, t + d + .16);
+      o.connect(g).connect(actx.destination); o.start(t + d); o.stop(t + d + .18);
+    });
+  } catch (e) { }
+}
+addEventListener('pointerdown', () => { try { if (actx && actx.state === 'suspended') actx.resume(); else if (!actx && S && S.settings.clickSound) actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } }, { passive: true });
+/* Zusammenfassung nach der Tour */
+function showSummary(r, info) {
+  const w = document.createElement('div'); w.className = 'dlg-wrap';
+  w.innerHTML = `<div class="dlg"><h2>${info.finished ? 'Geschafft! 🎉' : 'Tour beendet'}</h2><p>${esc(r.name)} · ${fmtDate(info.date)}</p>
+    <div class="stats"><div><b>${fmtDur(info.sec)}</b><small>gebraucht</small></div><div><b>${fmtDur(info.planned)}</b><small>geschätzt</small></div>
+    <div><b>${fmtKm(info.dist)}</b><small>Strecke</small></div><div><b>${info.sheets}</b><small>Blätter</small></div></div>
+    ${info.learned ? '<p>✓ Schätzung angepasst</p>' : ''}
+    <div class="btns"><button class="btn btn-p" id="fOk">OK</button></div></div>`;
+  document.body.appendChild(w);
+  $('#fOk', w).onclick = () => { w.remove(); exitNav(); };
+}
+function closeRun(finished) {
+  const r = runRoute(); if (!r) return;
+  const sec = Math.round(activeElapsed() / 1000);
+  const done = r.stops.filter(s => s.status === 'done');
+  const info = { finished, date: S.run.started, sec, planned: S.run.plannedTotal, dist: S.run.dist > 50 ? S.run.dist : (r.plan ? r.plan.dist : 0), sheets: done.reduce((a, s) => a + (s.count || 1), 0) };
+  if (done.length) r.history = (r.history || []).concat({ date: S.run.started, sec, planned: S.run.plannedTotal, done: done.length, total: r.stops.length });
+  info.learned = learnFromRun(r);
+  S.run = null; save(true);
+  if (done.length) showSummary(r, info); else exitNav();
 }
 function togglePause() {
   if (S.run.pausedAt) { S.run.paused += Date.now() - S.run.pausedAt; S.run.pausedAt = null; toast('Weiter geht\'s'); }
@@ -1087,30 +1203,15 @@ function togglePause() {
   save(); renderNavBottom();
 }
 async function endRunAsk() {
-  const r = runRoute(); const open = openStops().length;
-  const v = await dialog({ title: 'Route beenden?', text: open ? `Es sind noch ${plural(open, 'Stopp', 'Stopps')} offen. Deine Häkchen bleiben gespeichert.` : '', buttons: [{ label: 'Abbrechen', value: false }, { label: 'Beenden', cls: 'btn-r', value: true }] });
+  const open = openStops().length;
+  const v = await dialog({ title: 'Route beenden?', text: open ? `Noch ${plural(open, 'Stopp', 'Stopps')} offen.` : '', buttons: [{ label: 'Abbrechen', value: false }, { label: 'Beenden', cls: 'btn-r', value: true }] });
   if (!v) return;
-  if (r && r.stops.some(s => s.status === 'done')) r.history = (r.history || []).concat({ date: S.run.started, sec: Math.round(activeElapsed() / 1000), done: r.stops.filter(s => s.status === 'done').length, total: r.stops.length });
-  S.run = null; save(true); exitNav();
+  closeRun(false);
 }
 function finishRun() {
-  const r = runRoute(); if (!r) return;
-  const sec = Math.round(activeElapsed() / 1000);
-  const done = r.stops.filter(s => s.status === 'done').length, skipped = r.stops.filter(s => s.status === 'skip').length;
-  const prev = (r.history || []).filter(h => h.done === h.total);
-  const best = prev.length ? Math.min(...prev.map(h => h.sec)) : null;
-  r.history = (r.history || []).concat({ date: S.run.started, sec, done, total: r.stops.length });
+  if (!runRoute()) return;
   speak('Super, alle Briefkästen erledigt!', true);
-  const w = document.createElement('div'); w.className = 'dlg-wrap';
-  w.innerHTML = `<div class="dlg"><h2>Geschafft! 🎉</h2><p>${esc(r.name)} · ${fmtDate(S.run.started)}</p>
-    <div class="stats"><div><b>${fmtDur(sec)}</b><small>gebraucht</small></div><div><b>${fmtDur(S.run.plannedTotal)}</b><small>geplant</small></div>
-    <div><b>${r.stops.filter(s => s.status === 'done').reduce((a, s) => a + (s.count || 1), 0)}</b><small>Blätter eingeworfen</small></div><div><b>${skipped}</b><small>übersprungen</small></div></div>
-    ${best ? `<p>${sec < best ? '🏆 Neue Bestzeit! Vorher: ' + fmtDur(best) : 'Deine Bestzeit: ' + fmtDur(best)}</p>` : ''}
-    ${r.plan.returnHome ? `<p>Jetzt noch zurück zum ${esc(S.settings.home.label)}.</p>` : ''}
-    <div class="btns"><button class="btn btn-p" id="fOk">Fertig</button></div></div>`;
-  document.body.appendChild(w);
-  S.run = null; save(true);
-  $('#fOk', w).onclick = () => { w.remove(); exitNav(); };
+  closeRun(true);
 }
 function runList() {
   const r = runRoute(); const list = stopsOrdered(r);
@@ -1127,8 +1228,10 @@ function runList() {
 }
 
 /* ---------- Unterwegs: Position, Ankunft, Navigation ---------- */
+let lastRunPos = null;
 function onRunPosition() {
   const r = runRoute(); if (!r) return;
+  if (lastRunPos) { const d = hav(lastRunPos, pos); if (d > 4 && d < 300) { S.run.dist = (S.run.dist || 0) + d; lastRunPos = pos; } } else lastRunPos = pos;
   const n = nextStop();
   // Ankunft: nächstgelegener offener Stopp im Radius
   const rad = S.settings.radius + Math.min(20, (pos.acc || 0) / 2);
@@ -1185,6 +1288,20 @@ function announceNext(n) {
     else { spokenSteps.add(st.i + 'now'); spokenSteps.add(st.i + 'done'); t += '. Jetzt ' + st.text.replace(/^./, c => c.toLowerCase()); }
   } else { const w = wayLeft(n); if (w != null && w > 30) t += '. Noch ' + Math.round(w / 10) * 10 + ' Meter'; }
   speak(t);
+}
+/* Liegt das Haus links oder rechts von der Fahrtrichtung? */
+function houseSide(n) {
+  let a = null, b = null;
+  if (leg && leg.target === n.id && leg.real && leg.coords.length >= 2) {
+    const c = leg.coords; b = c[c.length - 1];
+    for (let i = c.length - 2; i >= 0; i--) if (hav(c[i], b) > 8) { a = c[i]; break; }
+  }
+  if (!a && pos && heading != null) { b = pos; a = { lat: pos.lat - Math.cos(heading * Math.PI / 180) * 1e-4, lon: pos.lon - Math.sin(heading * Math.PI / 180) * 1e-4 / Math.cos(pos.lat * Math.PI / 180) }; }
+  if (!a || !b || hav(b, n) < 3) return null;
+  const kx = Math.cos(b.lat * Math.PI / 180);
+  const dx = (b.lon - a.lon) * kx, dy = b.lat - a.lat, hx = (n.lon - b.lon) * kx, hy = n.lat - b.lat;
+  const cross = dx * hy - dy * hx;
+  return Math.abs(cross) < 1e-12 ? null : cross > 0 ? 'links' : 'rechts';
 }
 function distToLine(p, line) {
   let best = Infinity;
@@ -1320,7 +1437,9 @@ function renderDrive() {
   const d = pos ? hav(pos, n) : null;
   const stp = !here && leg && leg.target === n.id ? currentStep() : null;
   let dir;
-  if (here) dir = `<div class="dv-dir">${ic.flag}<div><b>Du bist da</b><small>Briefkasten einwerfen</small></div></div>`;
+  const side = here ? houseSide(n) : null;
+  if (here && side) dir = `<div class="dv-dir dv-side">${side === 'links' ? ic.left2 : ic.right2}<div><b>Haus ${side}</b><small>Du bist da</small></div></div>`;
+  else if (here) dir = `<div class="dv-dir">${ic.flag}<div><b>Du bist da</b><small>Briefkasten einwerfen</small></div></div>`;
   else if (stp && !/Ziel/.test(stp.text)) dir = `<div class="dv-dir">${stp.icon}<div><b>In ${fmtKm(stp.dist)}</b><small>${esc(stp.text)}</small></div></div>`;
   else dir = `<div class="dv-dir">${ic.straight}<div><b>${wayLeft(n) != null ? 'Noch ' + fmtKm(wayLeft(n)) : 'Weiter'}</b><small>bis zum Haus</small></div></div>`;
   driveEl.className = 'drive' + (here ? ' here' : '');
@@ -1345,50 +1464,56 @@ function renderDrive() {
 function openSettings() {
   const st = S.settings;
   const tog = (k, l) => `<div class="row"><div class="l">${l}</div><button class="tog ${st[k] ? 'on' : ''}" data-t="${k}"></button></div>`;
+  const card = (icon, title, inner) => `<div class="set-card"><div class="set-ct">${icon}<span>${title}</span></div>${inner}</div>`;
   const pg = openPage(`<div class="page-h"><button class="icon-btn" data-close>${ic.back}</button><h1>Einstellungen</h1><span style="width:46px"></span></div>
-  <div class="page-b">
-    <div class="set-h">Start</div>
-    <div class="link-row" id="eHome">${ic.home}<span>Startadresse<br><small style="color:var(--mut);font-size:15px">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · nicht gefunden' : '') : '–'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    <div class="set-h">Unterwegs</div>
-    <div class="row"><div class="l">Tempo</div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
-    <div class="row"><div class="l">Zeit pro Briefkasten</div><div class="step"><button data-s="stopSec" data-d="-1">−</button><span>${st.stopSec} s</span><button data-s="stopSec" data-d="1">+</button></div></div>
-    <div class="row"><div class="l">Berg vermeiden</div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Ankunft ab</div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
-    ${tog('autoDone', 'Automatisch abhaken')}
-    <div id="eAutoBox" style="${st.autoDone ? '' : 'display:none'}">
-      <div class="row"><div class="l">Stehen bleiben</div><div class="step"><button data-s="autoSec" data-d="-1">−</button><span>${st.autoSec} s</span><button data-s="autoSec" data-d="1">+</button></div></div>
-      <div class="row"><div class="l">Abstand</div><div class="seg" id="eARad">${[10, 15, 25].map(v => `<button data-v="${v}" class="${st.autoRad === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
-    </div>
-    <div class="set-h">Ansagen</div>
-    ${tog('voiceName', 'Name vorlesen')}
-    ${tog('vibrate', 'Vibrieren')}
-    <div class="set-h">Anzeige</div>
-    <div class="row"><div class="l">Design</div><div class="seg" id="eTheme">${[['light', 'Hell'], ['dark', 'Dunkel'], ['system', 'System']].map(([v, l]) => `<button data-v="${v}" class="${st.theme === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    ${tog('keepAwake', 'Bildschirm bleibt an')}
-    <div class="set-h">Erinnerung Austragetag</div>
-    ${tog('dayOn', 'An')}
-    <div class="row"><div class="l">Nächster Termin</div><input type="date" id="eDay" class="date-in" value="${st.dayNext || ''}"></div>
-    <div class="row"><div class="l">Alle</div><div class="seg" id="eEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.dayEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Wann</div><div class="seg" id="eWhen">${[['before', 'Tag davor'], ['same', 'Am Tag']].map(([v, l]) => `<button data-v="${v}" class="${st.remindWhen === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eTime" class="date-in" value="${st.remindTime}"></div>
-    <div class="field"><label>Text</label><input id="eText" value="${esc(st.remindText)}"></div>
-    <div class="link-row" id="eCalG">${ic.clock}<span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    <div class="link-row" id="eCalI">${ic.download}<span>Kalender-Datei (.ics)</span></div>
-    <div class="set-h">Erinnerung Backup</div>
-    ${tog('backupOn', 'An')}
-    <div class="row"><div class="l">Alle</div><div class="seg" id="eBEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.backupEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
-    <div class="row"><div class="l">Tag</div><select id="eBDay" class="date-in">${['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'].map((l, i) => `<option value="${i}" ${st.backupDay === i ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-    <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eBTime" class="date-in" value="${st.backupTime}"></div>
-    <div class="link-row" id="eBCalG">${ic.clock}<span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    <div class="link-row" id="eBCalI">${ic.download}<span>Kalender-Datei (.ics)</span></div>
-    <div class="set-h">Daten</div>
-    <div class="link-row" id="eBak">${ic.download}<span>Backup speichern<br><small style="color:var(--mut);font-size:15px">${S.lastBackup ? 'zuletzt ' + fmtDate(S.lastBackup) : 'noch keins'}</small></span></div>
-    <div class="link-row" id="eRes">${ic.upload}<span>Backup laden</span></div>
-    <div class="link-row red" id="eWipe">${ic.trash}<span>Alles löschen</span></div>
+  <div class="page-b set-page">
+    ${card(ic.home, 'Start', `
+      <div class="link-row" id="eHome"><span>Startadresse<br><small class="sub">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · nicht gefunden' : '') : '–'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>`)}
+    ${card(ic.map, 'Unterwegs', `
+      <div class="row"><div class="l">Tempo</div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
+      <div class="row"><div class="l">Berg vermeiden</div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="row"><div class="l">Ankunft ab</div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>`)}
+    ${card(ic.check, 'Automatisch abhaken', `
+      ${tog('autoDone', 'An')}
+      <div id="eAutoBox" style="${st.autoDone ? '' : 'display:none'}">
+        <div class="row"><div class="l">Stehen bleiben</div><div class="step"><button data-s="autoSec" data-d="-1">−</button><span>${st.autoSec} s</span><button data-s="autoSec" data-d="1">+</button></div></div>
+        <div class="row"><div class="l">Abstand</div><div class="seg" id="eARad">${[10, 15, 25].map(v => `<button data-v="${v}" class="${st.autoRad === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
+      </div>`)}
+    ${card(ic.vol, 'Ton & Ansagen', `
+      ${tog('voiceName', 'Name vorlesen')}
+      ${tog('clickSound', 'Ton beim Abhaken')}
+      ${tog('vibrate', 'Vibrieren')}`)}
+    ${card(ic.layers, 'Anzeige', `
+      <div class="row"><div class="l">Design</div><div class="seg" id="eTheme">${[['light', 'Hell'], ['dark', 'Dunkel'], ['system', 'System']].map(([v, l]) => `<button data-v="${v}" class="${st.theme === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+      ${tog('keepAwake', 'Bildschirm bleibt an')}`)}
+    ${card(ic.clock, 'Erinnerung Austragetag', `
+      ${tog('dayOn', 'An')}
+      <div id="eDayBox" style="${st.dayOn ? '' : 'display:none'}">
+        <div class="row"><div class="l">Nächster Termin</div><input type="date" id="eDay" class="date-in" value="${st.dayNext || ''}"></div>
+        <div class="row"><div class="l">Alle</div><div class="seg" id="eEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.dayEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="row"><div class="l">Wann</div><div class="seg" id="eWhen">${[['before', 'Tag davor'], ['same', 'Am Tag']].map(([v, l]) => `<button data-v="${v}" class="${st.remindWhen === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eTime" class="date-in" value="${st.remindTime}"></div>
+        <div class="field"><label>Text</label><input id="eText" value="${esc(st.remindText)}"></div>
+        <div class="link-row" id="eCalG"><span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+        <div class="link-row" id="eCalI"><span>Kalender-Datei (.ics)</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+      </div>`)}
+    ${card(ic.download, 'Erinnerung Backup', `
+      ${tog('backupOn', 'An')}
+      <div id="eBakBox" style="${st.backupOn ? '' : 'display:none'}">
+        <div class="row"><div class="l">Alle</div><div class="seg" id="eBEvery">${[[7, '1 Wo.'], [14, '2 Wo.'], [28, '4 Wo.']].map(([v, l]) => `<button data-v="${v}" class="${st.backupEvery === v ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="row"><div class="l">Tag</div><select id="eBDay" class="date-in">${['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'].map((l, i) => `<option value="${i}" ${st.backupDay === i ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="row"><div class="l">Uhrzeit</div><input type="time" id="eBTime" class="date-in" value="${st.backupTime}"></div>
+        <div class="link-row" id="eBCalG"><span>In Google Kalender</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+        <div class="link-row" id="eBCalI"><span>Kalender-Datei (.ics)</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+      </div>`)}
+    ${card(ic.csv, 'Daten', `
+      <div class="link-row" id="eBak"><span>Backup speichern<br><small class="sub">${S.lastBackup ? 'zuletzt ' + fmtDate(S.lastBackup) : 'noch keins'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+      <div class="link-row" id="eRes"><span>Backup laden</span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
+      <div class="link-row red" id="eWipe"><span>Alles löschen</span></div>`)}
     <div class="help" style="font-size:13px;padding-top:18px">Oli Zeitung ${VERSION} · © OpenStreetMap, Esri, OSRM, Open-Meteo</div>
   </div>`, { onClose: () => { drawMarkers(); renderSheet(); } });
   const el = pg.el; const re = () => { pg.close(); openSettings(); };
-  el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st[b.dataset.t] = !st[b.dataset.t]; b.classList.toggle('on', st[b.dataset.t]); save(); if (b.dataset.t === 'autoDone') $('#eAutoBox', el).style.display = st.autoDone ? '' : 'none'; if (b.dataset.t === 'returnHome') S.routes.forEach(r => r.optimized && (r.optimized = false)); });
+  el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st[b.dataset.t] = !st[b.dataset.t]; b.classList.toggle('on', st[b.dataset.t]); save(); const boxes = { autoDone: '#eAutoBox', dayOn: '#eDayBox', backupOn: '#eBakBox' }; if (boxes[b.dataset.t]) $(boxes[b.dataset.t], el).style.display = st[b.dataset.t] ? '' : 'none'; if (b.dataset.t === 'returnHome') S.routes.forEach(r => r.optimized && (r.optimized = false)); });
   el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const k = b.dataset.s; st[k] = k === 'speed' ? clamp(st[k] + +b.dataset.d, 6, 25) : k === 'autoSec' ? clamp(st[k] + +b.dataset.d, 2, 60) : clamp(st[k] + +b.dataset.d, 1, 120); b.parentNode.querySelector('span').textContent = st[k] + (k === 'speed' ? ' km/h' : ' s'); S.routes.forEach(recomputePlan); save(); });
   el.querySelectorAll('#eHill button').forEach(b => b.onclick = () => { st.hill = +b.dataset.v; el.querySelectorAll('#eHill button').forEach(x => x.classList.toggle('sel', x === b)); S.routes.forEach(r => r.optimized = false); save(); toast('Bitte Route neu optimieren'); });
   el.querySelectorAll('#eRad button').forEach(b => b.onclick = () => { st.radius = +b.dataset.v; el.querySelectorAll('#eRad button').forEach(x => x.classList.toggle('sel', x === b)); save(); });
