@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '2.3';
+const VERSION = '2.4';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -630,21 +630,24 @@ async function createRoute() {
   if (how === 'c') importCSV(); else if (how === 's') { setSheet(true); setTimeout(() => $('#q').focus(), 280); }
 }
 function routeInfo(r) {
-  const L = learned(r), hist = r.history || [], last = hist[hist.length - 1];
+  const hist = r.history || [], last = hist[hist.length - 1];
   const sheets = r.stops.reduce((a, s) => a + (s.count || 1), 0);
   const row = (l, v) => `<div class="row"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+  const kmh = x => x.toFixed(1).replace('.', ',') + ' km/h';
+  const modeCard = m => {
+    const L = learned(r, m), note = L.from === 'route' ? '' : L.from === 'andere' ? ' (andere Routen)' : ' (Start)';
+    const runs = hist.filter(h => (h.mode || 'roller') === m && h.done === h.total);
+    return `<div class="set-card"><div class="set-ct">${m === 'fuss' ? ic.user : ic.map}<span>${MODES[m].label}</span></div>
+      ${row('Ø Tempo', kmh(MODES[m].kmh / L.a) + note)}${row('Ø pro Briefkasten', Math.round(L.b) + ' s' + note)}
+      ${runs.length ? row('Ø Dauer', fmtDur(runs.reduce((a, h) => a + h.sec, 0) / runs.length)) : ''}${row('Gelernt aus', plural(L.n, 'Tour', 'Touren'))}</div>`;
+  };
   openPage(`<div class="page-h"><span style="width:46px"></span><h1>${esc(r.name)}</h1><button class="icon-btn" data-close>${ic.x}</button></div>
   <div class="page-b set-page"><div class="set-card">
     ${row('Stopps', r.stops.length)}${row('Blätter', sheets)}
-    ${row('Strecke', r.plan ? fmtKm(r.plan.dist) : '–')}${row('Höhenmeter', r.plan ? r.plan.up + ' m' : '–')}
-    ${row('Geschätzte Dauer', r.plan ? fmtDur(r.plan.total) : '–')}
-  </div><div class="set-card">
+    ${row('Strecke', r.plan ? fmtKm(r.plan.dist) : '–')}${row('Geschätzte Dauer', r.plan ? fmtDur(r.plan.total) : '–')}
     ${row('Gefahrene Touren', hist.length)}
-    ${row('Ø pro Briefkasten', Math.round(L.b) + ' s' + (L.n ? '' : ' (Start)'))}
-    ${row('Ø Tempo', (S.settings.speed / L.a).toFixed(1).replace('.', ',') + ' km/h' + (L.n ? '' : ' (Start)'))}
-    ${row('Gelernt aus', plural(L.n, 'Tour', 'Touren'))}
-  </div>${last ? `<div class="set-card">
-    ${row('Letzte Tour', fmtDate(last.date))}${row('Gebraucht', fmtDur(last.sec))}${last.planned ? row('Geschätzt', fmtDur(last.planned)) : ''}
+  </div>${modeCard('roller')}${modeCard('fuss')}${last ? `<div class="set-card">
+    ${row('Letzte Tour', fmtDate(last.date))}${row('Gebraucht (' + MODES[last.mode || 'roller'].label + ')', fmtDur(last.sec))}${last.planned ? row('Geschätzt', fmtDur(last.planned)) : ''}
   </div>` : ''}</div>`, { sheetlike: true });
 }
 function routeItemMenu(anchor, id) {
@@ -787,7 +790,7 @@ async function ensureData(r, b) {
   return { pts, stops };
 }
 function costMatrix(r, pts) {
-  const st = S.settings, f = 15 / st.speed, hill = HILL[st.hill] || 0;
+  const st = S.settings, f = 1, hill = HILL[st.hill] || 0;
   const n = pts.length, c = [];
   for (let i = 0; i < n; i++) {
     c.push([]);
@@ -800,20 +803,39 @@ function costMatrix(r, pts) {
   return c;
 }
 /* Gelernte Werte pro Route (Ø der letzten 5 Touren) */
-function learned(r) {
-  const runs = (r && r.learn && r.learn.runs) || [];
-  if (!runs.length) return { a: 1, b: 15, n: 0 };
-  return { a: runs.reduce((x, k) => x + k.a, 0) / runs.length, b: runs.reduce((x, k) => x + k.b, 0) / runs.length, n: runs.length };
+/* Roller oder zu Fuß: jede Art lernt eigene Werte */
+const MODES = { roller: { kmh: 15, label: 'Roller' }, fuss: { kmh: 5, label: 'zu Fuß' } };
+const modeRuns = (r, m) => {
+  if (!r || !r.learn) return [];
+  if (r.learn.runs && !r.learn.roller) { r.learn = { roller: { runs: r.learn.runs }, fuss: { runs: [] } }; }
+  return (r.learn[m] && r.learn[m].runs) || [];
+};
+const avgRuns = runs => ({ a: runs.reduce((x, k) => x + k.a, 0) / runs.length, b: runs.reduce((x, k) => x + k.b, 0) / runs.length });
+function learned(r, m) {
+  m = m || curMode();
+  const runs = modeRuns(r, m);
+  if (runs.length) return Object.assign(avgRuns(runs), { n: runs.length, from: 'route' });
+  const other = S.routes.filter(x => x !== r).flatMap(x => modeRuns(x, m).length ? [avgRuns(modeRuns(x, m))] : []);
+  if (other.length) return Object.assign(avgRuns(other), { n: 0, from: 'andere' });
+  return { a: 1, b: 15, n: 0, from: 'start' };
 }
-const stopTime = (r, s) => learned(r).b * (s.count > 1 ? 1 + .3 * (s.count - 1) : 1);
-function planFor(r, pts, idxOrder, returnHome) {
-  const st = S.settings, f = 15 / st.speed * learned(r).a;
+const curMode = () => (S.run && S.run.mode) || S.lastMode || 'roller';
+const driveF = (r, m) => { m = m || curMode(); return 15 / MODES[m].kmh * learned(r, m).a; };
+const stopTime = (r, s, m) => learned(r, m).b * (s.count > 1 ? 1 + .3 * (s.count - 1) : 1);
+function planFor(r, pts, idxOrder, returnHome, m) {
+  const st = S.settings, f = driveF(r, m);
   let dur = 0, dist = 0, up = 0, prev = 0; const legs = [];
   const step = (a, b) => { const d = (r.matrix.dur[a][b] ?? hav(pts[a], pts[b]) * 1.4 / 4.2) * f; const m = r.matrix.dist[a][b] ?? hav(pts[a], pts[b]) * 1.4; dur += d; dist += m; if (pts[a].ele != null && pts[b].ele != null) up += Math.max(0, pts[b].ele - pts[a].ele); return d; };
   for (const k of idxOrder) { legs.push(step(prev, k)); prev = k; }
   let back = 0; if (returnHome) back = step(prev, 0);
-  const stopsT = idxOrder.reduce((a, k) => a + stopTime(r, pts[k]), 0);
+  const stopsT = idxOrder.reduce((a, k) => a + stopTime(r, pts[k], m), 0);
   return { drive: dur, total: dur + stopsT, dist, up: Math.round(up), legs, back, returnHome, endName: pts[prev].street || 'Start' };
+}
+function planTotalFor(r, m) {
+  if (!r.matrix || !r.order) return r.plan ? r.plan.total : 0;
+  const stops = r.stops.filter(s => s.lat != null); const pts = [S.settings.home].concat(stops);
+  const idx = new Map(stops.map((s, i) => [s.id, i + 1]));
+  return planFor(r, pts, r.order.map(id => idx.get(id)).filter(Boolean), r.plan ? r.plan.returnHome : S.settings.returnHome, m).total;
 }
 function recomputePlan(r) {
   if (!r.matrix || !r.order) return;
@@ -956,6 +978,7 @@ function dragStop(s) {
 function pickRoute() {
   const rs = S.routes.filter(r => r.stops.length);
   if (!rs.length) return toast('Erst Adressen hinzufügen');
+  if (rs.length === 1) return startRun(rs[0].id);
   const pg = openPage(`<div class="page-h"><span style="width:46px"></span><h1>Welche Route?</h1><button class="icon-btn" data-close>${ic.x}</button></div>
     <div class="page-b">${rs.map(r => {
       const last = r.history && r.history.length ? r.history[r.history.length - 1] : null;
@@ -976,7 +999,8 @@ async function startRun(id, skipOpt) {
     if (!v) return;
     if (v === 'new') r.stops.forEach(s => s.status = 'open');
   }
-  S.run = { routeId: id, started: Date.now(), paused: 0, pausedAt: null, doneLog: [], plannedTotal: r.plan.total, segs: [], segStart: Date.now(), segPaused: 0, segIdle: 0, lastId: null, dist: 0 };
+  const mode0 = S.lastMode || 'roller';
+  S.run = { routeId: id, mode: mode0, started: Date.now(), paused: 0, pausedAt: null, doneLog: [], plannedTotal: planTotalFor(r, mode0), segs: [], segStart: Date.now(), segPaused: 0, segIdle: 0, lastId: null, dist: 0 };
   save(true); enterNav();
   lastStreet = null;
   speak('Route ' + r.name + ' gestartet. ' + plural(openStops().length, 'Stopp', 'Stopps') + '.', true);
@@ -1030,14 +1054,14 @@ function exitNav() {
 }
 function remainingEstimate() {
   const r = runRoute(); if (!r || !r.plan) return null;
-  const st = S.settings, f = 15 / st.speed * learned(r).a;
+  const st = S.settings, f = driveF(r);
   const stops = r.stops.filter(s => s.lat != null); const pts = [st.home].concat(stops);
   const idx = new Map(stops.map((s, i) => [s.id, i + 1]));
   const open = openStops(); if (!open.length) return { sec: 0, dist: 0 };
   let sec = 0, dist = 0;
   // bis zum nächsten Stopp
   if (leg && leg.target === open[0].id && pos) { sec += leg.dur * f * (leg.remainFrac ?? 1); dist += leg.dist * (leg.remainFrac ?? 1); }
-  else if (pos) { const d = hav(pos, open[0]) * 1.4; sec += d / (st.speed / 3.6) * learned(r).a; dist += d; }
+  else if (pos) { const d = hav(pos, open[0]) * 1.4; sec += d / 4.17 * driveF(r); dist += d; }
   for (let i = 0; i < open.length; i++) {
     sec += stopTime(r, open[i]);
     if (i > 0) { const a = idx.get(open[i - 1].id), b = idx.get(open[i].id); sec += (r.matrix.dur[a][b] ?? 0) * f; dist += r.matrix.dist[a][b] ?? 0; }
@@ -1122,7 +1146,7 @@ function baseDrive(r, fromId, toId) {
   if (!r.matrix) return null;
   const stops = r.stops.filter(x => x.lat != null), idx = new Map(stops.map((x, i) => [x.id, i + 1]));
   const a = idx.get(fromId), b = idx.get(toId); if (a == null || b == null) return null;
-  const d = r.matrix.dur[a][b]; return d == null ? null : d * 15 / S.settings.speed;
+  return r.matrix.dur[a][b];
 }
 function segReset(lastId) {
   const R0 = S.run; if (!R0) return;
@@ -1134,7 +1158,7 @@ function recordSeg(s) {
   if (R0.lastId) {
     const T = (Date.now() - R0.segStart - (R0.paused - R0.segPaused)) / 1000 - R0.segIdle;
     const D = baseDrive(r, R0.lastId, s.id);
-    if (D != null && T > 1) R0.segs.push({ T, D, N: s.count || 1 });
+    if (D != null && T > 1) R0.segs.push({ T, R: D, N: s.count || 1 });
   }
   segReset(s.id);
 }
@@ -1147,11 +1171,18 @@ function fitRun(segs) {
   if (kept.length >= 5) f = fit(kept) || f;
   return { a: clamp(f.a, .5, 2.5), b: clamp(f.b, 5, 60), n: segs.length };
 }
-function learnFromRun(r) {
-  const f = fitRun(S.run && S.run.segs); if (!f) return false;
-  r.learn = r.learn || { runs: [] };
-  r.learn.runs = r.learn.runs.concat({ a: f.a, b: f.b, date: Date.now() }).slice(-5);
-  recomputePlan(r); return true;
+function learnFromRun(r, m) {
+  const segs = (S.run && S.run.segs || []).map(g => ({ T: g.T, N: g.N, D: (g.R != null ? g.R : g.D) * 15 / MODES[m].kmh }));
+  const f = fitRun(segs); if (!f) return false;
+  modeRuns(r, m);
+  r.learn = r.learn || {}; r.learn.roller = r.learn.roller || { runs: [] }; r.learn.fuss = r.learn.fuss || { runs: [] };
+  r.learn[m].runs = r.learn[m].runs.concat({ a: f.a, b: f.b, date: Date.now() }).slice(-5);
+  return true;
+}
+/* Roller oder zu Fuß erkennen: Tempo nur in Bewegung (unter 7 km/h = zu Fuß) */
+function detectMode() {
+  const R0 = S.run; if (!R0 || (R0.moveDist || 0) < 300) return null;
+  return (R0.moveDist / R0.moveTime) * 3.6 < 7 ? 'fuss' : 'roller';
 }
 let idleT = null;
 function idleTick() {
@@ -1179,7 +1210,7 @@ addEventListener('pointerdown', () => { try { if (actx && actx.state === 'suspen
 /* Zusammenfassung nach der Tour */
 function showSummary(r, info) {
   const w = document.createElement('div'); w.className = 'dlg-wrap';
-  w.innerHTML = `<div class="dlg"><h2>${info.finished ? 'Geschafft! 🎉' : 'Tour beendet'}</h2><p>${esc(r.name)} · ${fmtDate(info.date)}</p>
+  w.innerHTML = `<div class="dlg"><h2>${info.finished ? 'Geschafft! 🎉' : 'Tour beendet'}</h2><p>${esc(r.name)} · ${fmtDate(info.date)} · ${MODES[info.mode || 'roller'].label}</p>
     <div class="stats"><div><b>${fmtDur(info.sec)}</b><small>gebraucht</small></div><div><b>${fmtDur(info.planned)}</b><small>geschätzt</small></div>
     <div><b>${fmtKm(info.dist)}</b><small>Strecke</small></div><div><b>${info.sheets}</b><small>Blätter</small></div></div>
     ${info.learned ? '<p>✓ Schätzung angepasst</p>' : ''}
@@ -1192,8 +1223,12 @@ function closeRun(finished) {
   const sec = Math.round(activeElapsed() / 1000);
   const done = r.stops.filter(s => s.status === 'done');
   const info = { finished, date: S.run.started, sec, planned: S.run.plannedTotal, dist: S.run.dist > 50 ? S.run.dist : (r.plan ? r.plan.dist : 0), sheets: done.reduce((a, s) => a + (s.count || 1), 0) };
-  if (done.length) r.history = (r.history || []).concat({ date: S.run.started, sec, planned: S.run.plannedTotal, done: done.length, total: r.stops.length });
-  info.learned = learnFromRun(r);
+  const mode = detectMode() || S.run.mode || 'roller';
+  info.mode = mode;
+  if (done.length) r.history = (r.history || []).concat({ date: S.run.started, sec, planned: S.run.plannedTotal, done: done.length, total: r.stops.length, mode });
+  info.learned = learnFromRun(r, mode);
+  if (done.length) S.lastMode = mode;
+  recomputePlan(r);
   S.run = null; save(true);
   if (done.length) showSummary(r, info); else exitNav();
 }
@@ -1231,7 +1266,21 @@ function runList() {
 let lastRunPos = null;
 function onRunPosition() {
   const r = runRoute(); if (!r) return;
-  if (lastRunPos) { const d = hav(lastRunPos, pos); if (d > 4 && d < 300) { S.run.dist = (S.run.dist || 0) + d; lastRunPos = pos; } } else lastRunPos = pos;
+  if (lastRunPos) {
+    const d = hav(lastRunPos, pos), dt = (pos.t - lastRunPos.t) / 1000;
+    if (d > 4 && d < 300) {
+      S.run.dist = (S.run.dist || 0) + d;
+      const v = dt > 0 ? d / dt : 0;
+      if (dt <= 20 && v > .6 && v < 15) { S.run.moveDist = (S.run.moveDist || 0) + d; S.run.moveTime = (S.run.moveTime || 0) + dt; }
+      lastRunPos = pos;
+      const m = detectMode();
+      if (m && m !== S.run.mode) {
+        S.run.mode = m; S.run.plannedTotal = planTotalFor(r, m);
+        toast(m === 'fuss' ? 'Zu Fuß erkannt – Zeit angepasst' : 'Roller erkannt – Zeit angepasst');
+        renderNavBottom(); renderDrive();
+      }
+    } else if (d >= 300) lastRunPos = pos;
+  } else lastRunPos = pos;
   const n = nextStop();
   // Ankunft: nächstgelegener offener Stopp im Radius
   const rad = S.settings.radius + Math.min(20, (pos.acc || 0) / 2);
@@ -1470,7 +1519,6 @@ function openSettings() {
     ${card(ic.home, 'Start', `
       <div class="link-row" id="eHome"><span>Startadresse<br><small class="sub">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · nicht gefunden' : '') : '–'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>`)}
     ${card(ic.map, 'Unterwegs', `
-      <div class="row"><div class="l">Tempo</div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
       <div class="row"><div class="l">Berg vermeiden</div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
       <div class="row"><div class="l">Ankunft ab</div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>`)}
     ${card(ic.check, 'Automatisch abhaken', `
