@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '2.1';
+const VERSION = '2.2';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -597,9 +597,9 @@ function toast(t, ms = 2600) { const el = $('#toast'); el.textContent = t; el.cl
 function openDrawer() {
   const routes = S.routes.slice().sort((a, b) => b.created - a.created);
   $('#drawer').innerHTML = `
-    <div class="dr-top"><div class="dr-icons"><button class="icon-btn" id="dHelp">${ic.help}</button><button class="icon-btn" id="dSet">${ic.gear}</button></div>
+    <div class="dr-top"><div class="dr-icons"><button class="icon-btn" id="dSet">${ic.gear}</button></div>
       <div class="dr-user"><img src="icon-192.png" alt=""><div><h2>Oli Zeitung</h2><p>Kostenlos · für immer 😉</p></div></div></div>
-    <div class="dr-list">${(() => { const d = S.settings.dayOn ? nextDeliveryDay() : null; return d ? `<div class="dr-day">📰 Nächster Austragetag: <b>${isoDay(d) === isoDay(new Date()) ? 'heute' : fmtDay(d)}</b></div>` : ''; })()}<div class="dr-h">Meine Routen</div>
+    <div class="dr-list">${(() => { const d = S.settings.dayOn ? nextDeliveryDay() : null; return d ? `<div class="dr-day">📰 Nächster Austragetag ${dayIn(d)}</div>` : ''; })()}<div class="dr-h">Meine Routen</div>
       ${routes.length ? routes.map(r => `<div class="route-it ${r.id === S.activeId ? 'act' : ''}" data-id="${r.id}"><span class="d">${fmtDate(r.created)}</span><div class="n"><b>${esc(r.name)}</b><small>${plural(r.stops.length, 'Stopp', 'Stopps')}${r.plan ? ' · ' + fmtDur(r.plan.total) : ''}${r.history && r.history.length ? ' · ' + r.history.length + '× gefahren' : ''}</small></div><button class="icon-btn" data-m="${r.id}">${ic.more}</button></div>`).join('') : '<div class="empty" style="padding:12px">Noch keine Routen.</div>'}
     </div>
     <div class="dr-foot"><button class="btn btn-p" id="dNew">${ic.plus} Route erstellen</button></div>`;
@@ -607,7 +607,6 @@ function openDrawer() {
   arm();
   $('#dNew').onclick = () => { closeDrawer(); createRoute(); };
   $('#dSet').onclick = () => { closeDrawer(); openSettings(); };
-  $('#dHelp').onclick = () => { closeDrawer(); openHelp(); };
   $('#drawer').querySelectorAll('.route-it').forEach(el => el.onclick = e => {
     if (e.target.closest('[data-m]')) return;
     selectRoute(el.dataset.id); closeDrawer();
@@ -823,6 +822,7 @@ async function optimize(r, interactive) {
     const choose = async ret => {
       const ord = ret ? withRet : noRet;
       r.order = ord.map(k => stops[k - 1].id).concat(r.stops.filter(s => s.lat == null).map(s => s.id));
+      S.settings.returnHome = ret;
       r.plan = ret ? pA : pB; r.plan.alt = ret ? { total: pB.total, endName: pB.endName } : { total: pA.total };
       r.optimized = true;
       const seq = [pts[0]].concat(ord.map(k => pts[k])).concat(ret ? [pts[0]] : []);
@@ -951,6 +951,7 @@ async function startRun(id, skipOpt) {
   }
   S.run = { routeId: id, started: Date.now(), paused: 0, pausedAt: null, doneLog: [], plannedTotal: r.plan.total };
   save(true); enterNav();
+  lastStreet = null;
   speak('Route ' + r.name + ' gestartet. ' + plural(openStops().length, 'Stopp', 'Stopps') + '.', true);
 }
 function resumeRun() { const r = S.routes.find(x => x.id === S.run.routeId); if (!r) { S.run = null; save(); return renderFooter(); } if (S.activeId !== r.id) selectRoute(r.id); enterNav(); }
@@ -1079,7 +1080,6 @@ function afterChange() {
   arriveShownFor = null; drawMarkers(); renderNav(); maybeLeg(true);
   const n = nextStop();
   if (!n) return finishRun();
-  if (S.settings.voiceNav) speak('Weiter zu ' + speakAddr(n) + (n.count > 1 ? '. ' + n.count + ' Blätter' : '') + (n.name ? '. ' + n.name : '') + (n.note ? '. ' + n.note : ''));
 }
 function togglePause() {
   if (S.run.pausedAt) { S.run.paused += Date.now() - S.run.pausedAt; S.run.pausedAt = null; toast('Weiter geht\'s'); }
@@ -1147,10 +1147,13 @@ async function maybeLeg(force) {
   const n = nextStop(); if (!n || !pos) { if (legLine) { map.removeLayer(legLine); legLine = null; } return; }
   const off = leg && leg.target === n.id ? distToLine(pos, leg.coords) : Infinity;
   const need = force || !leg || leg.target !== n.id || off > 40;
-  if (!need || Date.now() - legReqAt < (force ? 2000 : 12000)) return;
-  legReqAt = Date.now();
+  if (!need || legBusy) return;
+  if (leg && leg.target === n.id && Date.now() - legReqAt < (force ? 2000 : 12000)) return;
+  legReqAt = Date.now(); legBusy = true;
   let rt = null;
   try { rt = await osrmRoute([pos, n], true); } catch (e) { }
+  legBusy = false;
+  if (nextStop() !== n) return;
   const coords = rt ? rt.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] })) : [pos, { lat: n.lat, lon: n.lon }];
   leg = { target: n.id, coords, dur: rt ? rt.duration : hav(pos, n) * 1.4 / 4.2, dist: rt ? rt.distance : hav(pos, n) * 1.4, steps: rt ? buildSteps(rt) : null, remainFrac: 1, real: !!rt };
   prepLeg(leg);
@@ -1159,11 +1162,29 @@ async function maybeLeg(force) {
   legLine = L.polyline(coords.map(p => [p.lat, p.lon]), { color: '#1f9d55', weight: 7, opacity: .9, dashArray: rt ? null : '8 10' }).addTo(map);
   if (lastTarget !== n.id) {
     lastTarget = n.id; follow = true;
+    announceNext(n);
     const top = ($('#navTop').offsetHeight || 90) + 30, bot = ($('#navBottom').offsetHeight || 200) + 30;
     map.fitBounds(L.latLngBounds(coords.map(p => [p.lat, p.lon]).concat([[n.lat, n.lon]])), { paddingTopLeft: [40, top], paddingBottomRight: [80, bot], maxZoom: 18 });
     follow = false; setTimeout(() => { follow = true; }, 6000);
   }
   renderNav();
+}
+/* Ansage für den nächsten Stopp: in derselben Straße nur die Nummer */
+let legBusy = false, lastStreet = null;
+function announceNext(n) {
+  if (!S.settings.voiceNav) return;
+  const { str, hn } = splitAddr(n.street);
+  let t = (str === lastStreet && hn) ? 'Weiter zu Nummer ' + hn.replace('/', ' Strich ') : 'Weiter zu ' + speakAddr(n);
+  lastStreet = str;
+  if (n.count > 1) t += '. ' + n.count + ' Blätter';
+  if (n.name) t += '. ' + n.name;
+  if (n.note) t += '. ' + n.note;
+  const st = currentStep();
+  if (st && !/Ziel/.test(st.text)) {
+    if (st.dist > 25) { spokenSteps.add(st.i + 'pre'); t += '. In ' + Math.max(10, Math.round(st.dist / 10) * 10) + ' Metern ' + st.text.replace(/^./, c => c.toLowerCase()); }
+    else { spokenSteps.add(st.i + 'now'); spokenSteps.add(st.i + 'done'); t += '. Jetzt ' + st.text.replace(/^./, c => c.toLowerCase()); }
+  } else { const w = wayLeft(n); if (w != null && w > 30) t += '. Noch ' + Math.round(w / 10) * 10 + ' Meter'; }
+  speak(t);
 }
 function distToLine(p, line) {
   let best = Infinity;
@@ -1231,7 +1252,7 @@ function voiceStep() {
   if (!S.settings.voiceNav) return;
   const s = currentStep(); if (!s) return;
   if (s.dist < 18 && !spokenSteps.has(s.i + 'now')) { spokenSteps.add(s.i + 'now'); spokenSteps.add(s.i + 'done'); if (!/Ziel/.test(s.text)) speak(s.text); }
-  else if (s.dist < 70 && s.dist > 30 && !spokenSteps.has(s.i + 'pre')) { spokenSteps.add(s.i + 'pre'); speak('In ' + Math.round(s.dist / 10) * 10 + ' Metern ' + s.text.replace(/^./, c => c.toLowerCase())); }
+  else if (s.dist < 90 && s.dist > 28 && !spokenSteps.has(s.i + 'pre')) { spokenSteps.add(s.i + 'pre'); speak('In ' + Math.round(s.dist / 10) * 10 + ' Metern ' + s.text.replace(/^./, c => c.toLowerCase())); }
 }
 function speakAddr(s) { const { str, hn } = splitAddr(s.street); return str.replace(/str\./i, 'straße') + ' ' + hn.replace('/', ' Strich '); }
 let voice;
@@ -1241,7 +1262,8 @@ function speak(t, force) {
   try {
     if (!voice) voice = speechSynthesis.getVoices().find(v => /^de/i.test(v.lang));
     const u = new SpeechSynthesisUtterance(t); u.lang = 'de-DE'; if (voice) u.voice = voice; u.rate = 1.02;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    if (speechSynthesis.pending) speechSynthesis.cancel();
+    speechSynthesis.speak(u);
   } catch (e) { }
 }
 if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => { voice = null; };
@@ -1327,10 +1349,9 @@ function openSettings() {
   <div class="page-b">
     <div class="set-h">Start</div>
     <div class="link-row" id="eHome">${ic.home}<span>Startadresse<br><small style="color:var(--mut);font-size:15px">${st.home.label ? esc(st.home.label + ', ' + st.home.zip + ' ' + st.home.city) + (st.home.lat == null ? ' · nicht gefunden' : '') : '–'}</small></span>${ic.chev.replace('<svg', '<svg class="chev"')}</div>
-    ${tog('returnHome', 'Zurück zum Start')}
     <div class="set-h">Unterwegs</div>
     <div class="row"><div class="l">Tempo</div><div class="step"><button data-s="speed" data-d="-1">−</button><span>${st.speed} km/h</span><button data-s="speed" data-d="1">+</button></div></div>
-    <div class="row"><div class="l">Zeit pro Briefkasten</div><div class="step"><button data-s="stopSec" data-d="-5">−</button><span>${st.stopSec} s</span><button data-s="stopSec" data-d="5">+</button></div></div>
+    <div class="row"><div class="l">Zeit pro Briefkasten</div><div class="step"><button data-s="stopSec" data-d="-1">−</button><span>${st.stopSec} s</span><button data-s="stopSec" data-d="1">+</button></div></div>
     <div class="row"><div class="l">Berg vermeiden</div><div class="seg" id="eHill">${['Aus', 'Etwas', 'Stark'].map((l, i) => `<button data-v="${i}" class="${st.hill === i ? 'sel' : ''}">${l}</button>`).join('')}</div></div>
     <div class="row"><div class="l">Ankunft ab</div><div class="seg" id="eRad">${[15, 25, 40].map(v => `<button data-v="${v}" class="${st.radius === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
     ${tog('autoDone', 'Automatisch abhaken')}
@@ -1339,7 +1360,6 @@ function openSettings() {
       <div class="row"><div class="l">Abstand</div><div class="seg" id="eARad">${[10, 15, 25].map(v => `<button data-v="${v}" class="${st.autoRad === v ? 'sel' : ''}">${v} m</button>`).join('')}</div></div>
     </div>
     <div class="set-h">Ansagen</div>
-    ${tog('voiceNav', 'Sprachansagen')}
     ${tog('voiceName', 'Name vorlesen')}
     ${tog('vibrate', 'Vibrieren')}
     <div class="set-h">Anzeige</div>
@@ -1369,7 +1389,7 @@ function openSettings() {
   </div>`, { onClose: () => { drawMarkers(); renderSheet(); } });
   const el = pg.el; const re = () => { pg.close(); openSettings(); };
   el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st[b.dataset.t] = !st[b.dataset.t]; b.classList.toggle('on', st[b.dataset.t]); save(); if (b.dataset.t === 'autoDone') $('#eAutoBox', el).style.display = st.autoDone ? '' : 'none'; if (b.dataset.t === 'returnHome') S.routes.forEach(r => r.optimized && (r.optimized = false)); });
-  el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const k = b.dataset.s; st[k] = k === 'speed' ? clamp(st[k] + +b.dataset.d, 6, 25) : k === 'autoSec' ? clamp(st[k] + +b.dataset.d, 2, 60) : clamp(st[k] + +b.dataset.d, 5, 120); b.parentNode.querySelector('span').textContent = st[k] + (k === 'speed' ? ' km/h' : ' s'); S.routes.forEach(recomputePlan); save(); });
+  el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const k = b.dataset.s; st[k] = k === 'speed' ? clamp(st[k] + +b.dataset.d, 6, 25) : k === 'autoSec' ? clamp(st[k] + +b.dataset.d, 2, 60) : clamp(st[k] + +b.dataset.d, 1, 120); b.parentNode.querySelector('span').textContent = st[k] + (k === 'speed' ? ' km/h' : ' s'); S.routes.forEach(recomputePlan); save(); });
   el.querySelectorAll('#eHill button').forEach(b => b.onclick = () => { st.hill = +b.dataset.v; el.querySelectorAll('#eHill button').forEach(x => x.classList.toggle('sel', x === b)); S.routes.forEach(r => r.optimized = false); save(); toast('Bitte Route neu optimieren'); });
   el.querySelectorAll('#eRad button').forEach(b => b.onclick = () => { st.radius = +b.dataset.v; el.querySelectorAll('#eRad button').forEach(x => x.classList.toggle('sel', x === b)); save(); });
   $('#eHome', el).onclick = async () => {
@@ -1407,6 +1427,11 @@ function nextDeliveryDay(from = new Date()) {
   const d = new Date(st.dayNext + 'T00:00:00'); const today = new Date(isoDay(from) + 'T00:00:00');
   while (d < today) d.setDate(d.getDate() + st.dayEvery);
   return d;
+}
+function dayIn(d) {
+  const t = new Date(isoDay(new Date()) + 'T00:00:00'), days = Math.round((new Date(isoDay(d) + 'T00:00:00') - t) / 864e5);
+  const dm = pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.';
+  return days === 0 ? '<b>heute</b>' : days === 1 ? `<b>morgen</b> (${dm})` : `in <b>${days} Tagen</b> (${dm})`;
 }
 const fmtDay = d => d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
 function calendarEvent(kind, { title, text, start, weeks, file }) {
