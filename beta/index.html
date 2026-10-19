@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="robots" content="noindex, nofollow">
+<title>Oli Beta</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Karten-Knöpfe -->
+<button id="btnMenu" class="fab fab-menu" aria-label="Menü"></button>
+<div id="fabsRight" class="fabs-right">
+  <button id="btnCompass" class="fab fab-compass" aria-label="Norden oben"></button>
+  <div class="fab-wrap"><span id="satLabel" class="fab-label">Satellit aus</span><button id="btnLayer" class="fab" aria-label="Satellit"></button></div>
+  <button id="btnDrive" class="fab fab-drive" aria-label="Fahrmodus"></button>
+  <button id="btnLocate" class="fab" aria-label="Mein Standort"></button>
+  <button id="btnFit" class="fab" aria-label="Ganze Route"></button>
+</div>
+
+<!-- Untere Leiste (Stoppliste) -->
+<section id="sheet" class="sheet">
+  <div class="sheet-handle" id="sheetHandle"><i></i></div>
+  <div class="sheet-head" id="sheetHead"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</section>
+<footer id="footer" class="footer"></footer>
+
+<!-- Seitenmenü -->
+<div id="scrim" class="scrim"></div>
+<aside id="drawer" class="drawer"></aside>
+
+<!-- Navigation -->
+<div id="navTop" class="nav-top"></div>
+<div id="navBottom" class="nav-bottom"></div>
+
+<!-- Seiten / Dialoge -->
+<div id="pages"></div>
+<div id="toast" class="toast"></div>
+<div id="lock" class="lock"></div>
+
+<script src="maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
