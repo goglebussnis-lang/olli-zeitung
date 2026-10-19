@@ -2,7 +2,7 @@
    Alle Daten bleiben nur auf diesem Handy (localStorage). */
 'use strict';
 
-const VERSION = '2.4';
+const VERSION = '2.5';
 const KEY = 'olli.v1';
 const TEST = /[?&]test\b/.test(location.search);
 const API = {
@@ -369,7 +369,7 @@ function startGPS() {
     if (!acceptFix(c)) return;
     pos = c;
     gpsSpeed = p.coords.speed != null && !isNaN(p.coords.speed) ? p.coords.speed : null;
-    if (p.coords.heading != null && !isNaN(p.coords.heading) && p.coords.speed > 0.8) heading = p.coords.heading;
+    updateHeading(c);
     drawMe();
     if (S.run) onRunPosition();
   }, err => {
@@ -390,12 +390,37 @@ function acceptFix(c) {
   jumpBuf = [];
   return true;
 }
+/* Fahrtrichtung nur aus dem GPS: Strecke der letzten Meter, kein Kompass.
+   Neue Richtung erst nach echter Bewegung; beim Stehen bleibt die letzte. */
+let headFrom = null;
+function bearing(a, b) {
+  const t = Math.PI / 180, y = Math.sin((b.lon - a.lon) * t) * Math.cos(b.lat * t);
+  const x = Math.cos(a.lat * t) * Math.sin(b.lat * t) - Math.sin(a.lat * t) * Math.cos(b.lat * t) * Math.cos((b.lon - a.lon) * t);
+  return (Math.atan2(y, x) / t + 360) % 360;
+}
+function updateHeading(c) {
+  if (c.acc > 30) return;                                   // GPS zu ungenau
+  if (!headFrom || c.t - headFrom.t > 120000) { headFrom = c; return; }
+  if (gpsSpeed != null && gpsSpeed < 0.4) return;           // steht
+  if (hav(headFrom, c) < Math.max(10, c.acc * 1.2)) return; // noch nicht weit genug bewegt
+  const b = bearing(headFrom, c);
+  heading = heading == null ? b : (heading + (((b - heading) % 360 + 540) % 360 - 180) * .6 + 360) % 360;
+  headFrom = c;
+}
+const ARROW = '<svg viewBox="0 0 40 40" width="40" height="40"><path d="M20 3 32 32 20 25 8 32Z" fill="#2970ff" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>';
+let meRot = 0;
 function drawMe() {
   if (!pos) return;
-  const html = `<div class="me-wrap">${heading != null ? `<div class="me-cone" style="transform:rotate(${heading - 30}deg)"></div>` : ''}<div class="me"></div></div>`;
-  const icon = L.divIcon({ className: '', html, iconSize: [22, 22], iconAnchor: [11, 11] });
-  if (!meMarker) { meMarker = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: 2000, interactive: false }).addTo(map); meAcc = L.circle([pos.lat, pos.lon], { radius: pos.acc, weight: 0, fillColor: '#2970ff', fillOpacity: .08, interactive: false }).addTo(map); }
-  else { meMarker.setLatLng([pos.lat, pos.lon]).setIcon(icon); meAcc.setLatLng([pos.lat, pos.lon]).setRadius(pos.acc); }
+  if (!meMarker) {
+    const icon = L.divIcon({ className: '', html: `<div class="me-wrap"><div class="me"></div><div class="me-arrow">${ARROW}</div></div>`, iconSize: [40, 40], iconAnchor: [20, 20] });
+    meMarker = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: 2000, interactive: false }).addTo(map);
+    meAcc = L.circle([pos.lat, pos.lon], { radius: pos.acc, weight: 0, fillColor: '#2970ff', fillOpacity: .08, interactive: false }).addTo(map);
+  } else { meMarker.setLatLng([pos.lat, pos.lon]); meAcc.setLatLng([pos.lat, pos.lon]).setRadius(pos.acc); }
+  const w = meMarker.getElement() && meMarker.getElement().querySelector('.me-wrap');
+  if (w) {
+    w.classList.toggle('dir', heading != null);
+    if (heading != null) { meRot += ((heading - meRot) % 360 + 540) % 360 - 180; w.querySelector('.me-arrow').style.transform = `rotate(${meRot}deg)`; }
+  }
   if (follow) map.panTo([pos.lat, pos.lon], { animate: true });
 }
 
@@ -1085,7 +1110,7 @@ function renderNavTop() {
   const list = stopsOrdered(r); const no = list.indexOf(n) + 1;
   const d = wayLeft(n);
   let man = '';
-  if (leg && leg.steps && S.settings.voiceNav) {
+  if (leg && leg.steps) {
     const stp = currentStep();
     if (stp) man = `<div class="man">${stp.icon}<div class="t">${stp.dist != null ? 'In ' + fmtKm(stp.dist) : ''}<small>${esc(stp.text)}</small></div></div>`;
   }
