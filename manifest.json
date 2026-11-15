@@ -1,7 +1,7 @@
 {
-  "name": "Oli Zeitung",
-  "short_name": "Oli Zeitung",
-  "description": "Austrage-Routen für Zeitungen und Flyer",
+  "name": "Oli Beta",
+  "short_name": "Oli Beta",
+  "description": "Oli Zeitung – Test-Version mit neuer Karte",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -7,26 +7,30 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="robots" content="noindex, nofollow">
-<title>Oli Zeitung</title>
+<title>Oli Beta</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="leaflet.css">
+<link rel="stylesheet" href="maplibre-gl.css">
+<link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="map"></div>
 
 <!-- Karten-Knöpfe -->
-<button id="btnMenu" class="fab fab-menu" aria-label="Menü"></button>
 <div id="fabsRight" class="fabs-right">
+  <button id="btnCompass" class="fab fab-compass" aria-label="Norden oben"></button>
+  <button id="btnVoice" class="fab fab-voice" aria-label="Ansagen"></button>
   <div class="fab-wrap"><span id="satLabel" class="fab-label">Satellit aus</span><button id="btnLayer" class="fab" aria-label="Satellit"></button></div>
-  <button id="btnDrive" class="fab fab-drive" aria-label="Fahrmodus"></button>
   <button id="btnLocate" class="fab" aria-label="Mein Standort"></button>
-  <button id="btnFit" class="fab" aria-label="Ganze Route"></button>
 </div>
 
-<!-- Untere Leiste (Stoppliste) -->
+<!-- Startseite: Routen-Karte und Reiter -->
+<div id="homeCard" class="home-card glass"></div>
+<nav id="tabs" class="tabs glass"></nav>
+
+<!-- Stopp-Liste -->
 <section id="sheet" class="sheet">
   <div class="sheet-handle" id="sheetHandle"><i></i></div>
   <div class="sheet-head" id="sheetHead"></div>
@@ -40,14 +44,13 @@
 
 <!-- Navigation -->
 <div id="navTop" class="nav-top"></div>
-<div id="navBottom" class="nav-bottom"></div>
+<div id="navBottom" class="nav-bottom panel"></div>
 
 <!-- Seiten / Dialoge -->
 <div id="pages"></div>
 <div id="toast" class="toast"></div>
-<div id="lock" class="lock"></div>
 
-<script src="leaflet.js"></script>
+<script src="maplibre-gl.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
