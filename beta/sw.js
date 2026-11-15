@@ -1,6 +1,6 @@
 /* Oli Beta – Offline-Speicher (eigene Caches, die der normalen App bleiben unberührt) */
-const APP = 'olli-beta-app-v1', TILES = 'olli-beta-tiles-v1';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'maplibre-gl.js', 'maplibre-gl.css', 'manifest.json', 'icon-192.png', 'icon-512.png'];
+const APP = 'olli-beta-app-v3', TILES = 'olli-beta-tiles-v1';
+const FILES = ['./', 'index.html', 'style.css', 'fonts.css', 'app.js', 'maplibre-gl.js', 'maplibre-gl.css', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(APP).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('olli-beta-') && k !== APP && k !== TILES).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 let puts = 0;
